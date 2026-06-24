@@ -890,7 +890,7 @@ async function processUpdate(update: TelegramUpdate) {
                   ],
                   [
                     {
-                      text: "🔄 Vật tư thay thế là gì?",
+                      text: "🔄 Thay thế vật tư",
                       callback_data: `vt_thay|${parsed.sourceChatId}|${parsed.messageId}`,
                     },
                   ],

@@ -1770,7 +1770,7 @@ export default function TelegramFlowWorkbench() {
         return;
       }
 
-       setNodeConfigs((current) => {
+      setNodeConfigs((current) => {
         const next = current.map((node) => {
           if (node.id !== selectedConfig.id) {
             return node;
@@ -1783,11 +1783,6 @@ export default function TelegramFlowWorkbench() {
 
           if (isForwardOrRejectNode(node.name)) {
             nextParams.destinationChatId = target ? String(target.chatId) : "";
-            nextParams.chatId = target ? String(target.chatId) : "";
-            nextParams.additionalFields = {
-              ...(nextParams.additionalFields as JsonRecord || {}),
-              message_thread_id: target?.threadId ?? null,
-            };
           } else if (node.name.startsWith("Gửi tin nhắn xác nhận")) {
             nextParams.chatId = target ? `=-${Math.abs(target.chatId)}` : "";
             nextParams.additionalFields = {
@@ -1814,11 +1809,6 @@ export default function TelegramFlowWorkbench() {
 
         if (isForwardOrRejectNode(selectedConfig.name)) {
           nextParams.destinationChatId = target ? String(target.chatId) : "";
-          nextParams.chatId = target ? String(target.chatId) : "";
-          nextParams.additionalFields = {
-            ...(nextParams.additionalFields as JsonRecord || {}),
-            message_thread_id: target?.threadId ?? null,
-          };
         } else if (selectedConfig.name.startsWith("Gửi tin nhắn xác nhận")) {
           nextParams.chatId = target ? `=-${Math.abs(target.chatId)}` : "";
           nextParams.additionalFields = {
@@ -1872,41 +1862,6 @@ export default function TelegramFlowWorkbench() {
       };
     });
   }, [selectedConfig, nodeConfigs, snapshot, syncNodes]);
-
-  const updateNodeParameter = useCallback(
-    (key: string, value: any) => {
-      if (!selectedConfig) return;
-      setNodeConfigs((current) => {
-        const next = current.map((node) => {
-          if (node.id !== selectedConfig.id) {
-            return node;
-          }
-          return {
-            ...node,
-            parameters: {
-              ...node.parameters,
-              [key]: value,
-            },
-          };
-        });
-        syncNodes(next, snapshot);
-        return next;
-      });
-      setParameterDrafts((current) => {
-        const node = nodeConfigs.find((n) => n.id === selectedConfig.id);
-        const currentParams = node ? node.parameters : {};
-        const nextParams: JsonRecord = {
-          ...currentParams,
-          [key]: value,
-        };
-        return {
-          ...current,
-          [selectedConfig.id]: stringifyJson(nextParams),
-        };
-      });
-    },
-    [selectedConfig, nodeConfigs, snapshot, syncNodes],
-  );
 
   const handleAddMappingRow = useCallback(() => {
     if (!selectedConfig) return;
@@ -2683,28 +2638,13 @@ export default function TelegramFlowWorkbench() {
                   </div>
                 ) : isTargetConfigurableNode(selectedConfig.name) ? (
                   <div className="space-y-4">
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-medium tracking-wide uppercase text-white/35">Nhóm/Topic nhận tin</label>
-                      <TopicTargetPicker
-                        topics={availableTopics}
-                        value={getTopicSelection(selectedConfig.parameters)}
-                        hasSnapshot={Boolean(snapshot)}
-                        onChange={setTargetForSelectedNode}
-                        onClear={() => setTargetForSelectedNode(null)}
-                      />
-                    </div>
-
-                    {selectedConfig.parameters.text !== undefined && (
-                      <div className="space-y-1">
-                        <label className="text-[10px] font-medium tracking-wide uppercase text-white/35">Nội dung tin nhắn (Text)</label>
-                        <textarea
-                          placeholder="Nhập nội dung tin nhắn hoặc biểu thức n8n..."
-                          value={String(selectedConfig.parameters.text || "")}
-                          onChange={(e) => updateNodeParameter("text", e.target.value)}
-                          className="mt-1 w-full rounded-[6px] border border-white/12 bg-black/25 px-3 py-2 text-[12px] text-white outline-none focus:border-sky-400/40 min-h-[95px] transition placeholder:text-white/20 font-sans leading-5"
-                        />
-                      </div>
-                    )}
+                    <TopicTargetPicker
+                      topics={availableTopics}
+                      value={getTopicSelection(selectedConfig.parameters)}
+                      hasSnapshot={Boolean(snapshot)}
+                      onChange={setTargetForSelectedNode}
+                      onClear={() => setTargetForSelectedNode(null)}
+                    />
                   </div>
                 ) : (
                   <div className="rounded-[6px] border border-white/10 bg-white/[0.03] px-3 py-3 text-[12px] leading-5 text-white/68">

@@ -33,6 +33,7 @@ export type TelegramMessage = {
   is_topic_message?: boolean;
   forum_topic_created?: TelegramTopicInfo;
   forum_topic_edited?: TelegramTopicInfo;
+  reply_to_message?: TelegramMessage;
 };
 
 export type TelegramUpdate = {

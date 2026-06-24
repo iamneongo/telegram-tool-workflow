@@ -604,6 +604,45 @@ const NODE_PALETTE: Array<{
       mappings: [],
     },
   },
+  {
+    id: "vattu-co",
+    label: "Có vật tư",
+    kind: "action",
+    accent: "emerald",
+    n8nType: "n8n-nodes-base.telegram",
+    typeVersion: 1.2,
+    detail: "custom node",
+    subtitle: "sendMessage",
+    parameters: {
+      target: null,
+    },
+  },
+  {
+    id: "vattu-khong",
+    label: "Không có vật tư",
+    kind: "action",
+    accent: "rose",
+    n8nType: "n8n-nodes-base.telegram",
+    typeVersion: 1.2,
+    detail: "custom node",
+    subtitle: "sendMessage",
+    parameters: {
+      target: null,
+    },
+  },
+  {
+    id: "vattu-thaythe",
+    label: "Có vật tư thay thế",
+    kind: "action",
+    accent: "amber",
+    n8nType: "n8n-nodes-base.telegram",
+    typeVersion: 1.2,
+    detail: "custom node",
+    subtitle: "sendMessage",
+    parameters: {
+      target: null,
+    },
+  },
 ];
 
 const accentStyles: Record<NodeAccent, { ring: string; glow: string; text: string }> = {
@@ -1131,7 +1170,9 @@ function getTargetFromConfigPrefix(configs: N8nNodeConfig[], prefix: string) {
 function isForwardOrRejectNode(nodeName: string) {
   return nodeName.startsWith("Forward Tin nhắn") ||
          nodeName.startsWith("Chuyển tiếp") ||
-         nodeName.startsWith("Từ chối tin nhắn");
+         nodeName.startsWith("Từ chối tin nhắn") ||
+         nodeName.startsWith("Có vật tư") ||
+         nodeName.startsWith("Không có vật tư");
 }
 
 function isTargetConfigurableNode(nodeName: string) {

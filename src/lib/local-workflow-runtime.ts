@@ -602,6 +602,40 @@ async function processUpdate(update: TelegramUpdate) {
   startExecution(update);
   markStep(nodeNames.trigger, "success", "Telegram Trigger nhận update.");
 
+  // Handle replies to force reply replacement materials prompt
+  if (update.message && update.message.reply_to_message) {
+    const promptText = update.message.reply_to_message.text || "";
+    if (promptText.startsWith("Vui lòng reply tin nhắn này với tên vật tư thay thế")) {
+      let customTarget: AllowedTopicConfig | undefined;
+      if (runtime.forwardTargets) {
+        const matchedNode = runtime.forwardTargets.find((ft) => ft.nodeName.startsWith("Có vật tư thay thế"));
+        if (matchedNode) {
+          customTarget = matchedNode.target;
+        }
+      }
+
+      if (customTarget) {
+        const user = update.message.from;
+        const userName = user ? ([user.first_name, user.last_name].filter(Boolean).join(" ") || user.username || `User ${user.id}`) : "Ai đó";
+        const replyText = update.message.text || update.message.caption || "";
+
+        addLog("info", `Routing replacement material reply to: Có vật tư thay thế group`, update.update_id);
+        await runStep(`Gửi câu trả lời vật tư thay thế`, () =>
+          telegramRequest(runtime.token, "sendMessage", {
+            chat_id: customTarget!.chatId,
+            message_thread_id: customTarget!.threadId === null ? undefined : customTarget!.threadId,
+            text: `🔄 <b>Thông tin vật tư thay thế từ ${userName}:</b>\n\n"${replyText}"`,
+            parse_mode: "HTML",
+          })
+        );
+        
+        runtime.handledCount += 1;
+        finishExecution("success", `Đã gửi thông tin vật tư thay thế.`);
+        return;
+      }
+    }
+  }
+
   if (update.callback_query) {
     markStep(nodeNames.allowedTopic, "success", "Allowed topic: true");
     markStep(nodeNames.hasCallback, "success", "Callback: true");
@@ -624,12 +658,16 @@ async function processUpdate(update: TelegramUpdate) {
 
       if (chatId && messageId) {
         let statusHtml = "";
+        let targetNodePrefix = "";
         if (parsed.action === "vt_co") {
           statusHtml = `✅ <b>${userName}</b> đồng ý cung cấp vật tư.`;
+          targetNodePrefix = "Có vật tư";
         } else if (parsed.action === "vt_khong") {
           statusHtml = `❌ <b>${userName}</b> báo không có vật tư.`;
+          targetNodePrefix = "Không có vật tư";
         } else if (parsed.action === "vt_thay") {
           statusHtml = `🔄 <b>${userName}</b> yêu cầu dùng vật tư thay thế.`;
+          targetNodePrefix = "Có vật tư thay thế";
         }
 
         const newText = `${originalText}\n\n${statusHtml}`;
@@ -644,12 +682,34 @@ async function processUpdate(update: TelegramUpdate) {
           })
         );
 
+        // Find the target for the corresponding node
+        let customTarget: AllowedTopicConfig | undefined;
+        if (runtime.forwardTargets) {
+          const matchedNode = runtime.forwardTargets.find((ft) => ft.nodeName.startsWith(targetNodePrefix));
+          if (matchedNode) {
+            customTarget = matchedNode.target;
+          }
+        }
+
+        // Send notification to the designated group/topic if configured
+        if (customTarget) {
+          addLog("info", `Routing material response notification to: ${targetNodePrefix} group`, update.update_id);
+          await runStep(`Gửi thông báo (${targetNodePrefix})`, () =>
+            telegramRequest(runtime.token, "sendMessage", {
+              chat_id: customTarget!.chatId,
+              message_thread_id: customTarget!.threadId === null ? undefined : customTarget!.threadId,
+              text: newText,
+              parse_mode: "HTML",
+            })
+          );
+        }
+
         if (parsed.action === "vt_thay") {
           // Send a force reply prompt
           await runStep("Gửi yêu cầu nhập vật tư thay thế", () =>
             telegramRequest(runtime.token, "sendMessage", {
               chat_id: chatId,
-              message_thread_id: update.callback_query?.message?.message_thread_id,
+              message_thread_id: cbQuery.message?.message_thread_id,
               text: `Vui lòng reply tin nhắn này với tên vật tư thay thế cho tin nhắn trên:`,
               reply_markup: JSON.stringify({
                 force_reply: true,

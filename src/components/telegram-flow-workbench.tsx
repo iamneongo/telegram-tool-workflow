@@ -597,6 +597,7 @@ const NODE_PALETTE: Array<{
       destinationChatId: "",
       sourceChatId: "",
       messageId: "",
+      keywords: "",
     },
   },
 ];
@@ -1739,6 +1740,49 @@ export default function TelegramFlowWorkbench() {
     [nodeConfigs, selectedConfig, snapshot, syncNodes],
   );
 
+  const setKeywordsForSelectedNode = useCallback(
+    (keywords: string) => {
+      if (!selectedConfig || !selectedConfig.name.startsWith("Chuyển tiếp Vật tư")) {
+        return;
+      }
+
+      setNodeConfigs((current) => {
+        const next = current.map((node) => {
+          if (node.id !== selectedConfig.id) {
+            return node;
+          }
+
+          const nextParams: JsonRecord = {
+            ...node.parameters,
+            keywords,
+          };
+
+          return {
+            ...node,
+            parameters: nextParams,
+          };
+        });
+        syncNodes(next, snapshot);
+        return next;
+      });
+
+      setParameterDrafts((current) => {
+        const node = nodeConfigs.find((n) => n.id === selectedConfig.id);
+        const currentParams = node ? node.parameters : {};
+        const nextParams: JsonRecord = {
+          ...currentParams,
+          keywords,
+        };
+
+        return {
+          ...current,
+          [selectedConfig.id]: stringifyJson(nextParams),
+        };
+      });
+    },
+    [nodeConfigs, selectedConfig, snapshot, syncNodes],
+  );
+
   const applyRuntimeStatus = useCallback((nextStatus: RuntimeStatus) => {
     setRuntimeStatus(nextStatus);
     setWorkflowActive(nextStatus.active);
@@ -1761,7 +1805,7 @@ export default function TelegramFlowWorkbench() {
     setStatus({ kind: "loading", text: "Starting local workflow" });
 
     // Collect all forward targets from configs
-    const forwardTargets: Array<{ nodeName: string; target: AllowedTopicSelection }> = [];
+    const forwardTargets: Array<{ nodeName: string; target: AllowedTopicSelection; keywords?: string }> = [];
     for (const config of nodeConfigs) {
       if (isForwardOrRejectNode(config.name)) {
         const target = getTopicSelection(config.parameters);
@@ -1769,6 +1813,7 @@ export default function TelegramFlowWorkbench() {
           forwardTargets.push({
             nodeName: config.name,
             target,
+            keywords: typeof config.parameters.keywords === "string" ? config.parameters.keywords : undefined,
           });
         }
       }
@@ -2364,13 +2409,31 @@ export default function TelegramFlowWorkbench() {
                     onClear={() => setAllowedTopicsForSelectedNode([])}
                   />
                 ) : isTargetConfigurableNode(selectedConfig.name) ? (
-                  <TopicTargetPicker
-                    topics={availableTopics}
-                    value={getTopicSelection(selectedConfig.parameters)}
-                    hasSnapshot={Boolean(snapshot)}
-                    onChange={setTargetForSelectedNode}
-                    onClear={() => setTargetForSelectedNode(null)}
-                  />
+                  <div className="space-y-4">
+                    <TopicTargetPicker
+                      topics={availableTopics}
+                      value={getTopicSelection(selectedConfig.parameters)}
+                      hasSnapshot={Boolean(snapshot)}
+                      onChange={setTargetForSelectedNode}
+                      onClear={() => setTargetForSelectedNode(null)}
+                    />
+
+                    {selectedConfig.name.startsWith("Chuyển tiếp Vật tư") ? (
+                      <div className="space-y-1.5 rounded-[6px] border border-white/10 bg-white/[0.02] p-3">
+                        <label className="text-[11px] font-medium tracking-wide uppercase text-white/45">Từ khóa tìm kiếm (Keywords)</label>
+                        <input
+                          type="text"
+                          placeholder="Ví dụ: vật tư chính, cát, đá, xi măng"
+                          value={String(selectedConfig.parameters.keywords || "")}
+                          onChange={(e) => setKeywordsForSelectedNode(e.target.value)}
+                          className="mt-1 w-full rounded-[4px] border border-white/12 bg-black/25 px-2.5 py-1.5 text-[12px] text-white outline-none focus:border-sky-400/40"
+                        />
+                        <p className="mt-1 text-[10px] leading-relaxed text-white/35">
+                          Nhập các từ khóa cách nhau bởi dấu phẩy. Nếu tin nhắn được phê duyệt chứa bất kỳ từ khóa nào ở đây, nó sẽ được chuyển tiếp đến Topic này.
+                        </p>
+                      </div>
+                    ) : null}
+                  </div>
                 ) : (
                   <div className="rounded-[6px] border border-white/10 bg-white/[0.03] px-3 py-3 text-[12px] leading-5 text-white/68">
                     Node này đã được cấu hình sẵn. Chỉ cần bấm Start là chạy.

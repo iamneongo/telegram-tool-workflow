@@ -86,6 +86,7 @@ type LocalWorkflowRuntime = {
 export type TargetWithNodeName = {
   nodeName: string;
   target: AllowedTopicConfig;
+  keywords?: string;
 };
 
 export type LocalWorkflowStatus = Omit<LocalWorkflowRuntime, "timer" | "token"> & {
@@ -613,23 +614,41 @@ async function processUpdate(update: TelegramUpdate) {
       let forwardChatId = runtime.forwardTarget?.chatId ?? forwardDestinationChatId;
       let forwardThreadId = runtime.forwardTarget ? runtime.forwardTarget.threadId : null;
 
-      // Dynamic routing for Materials: "vật tư chính" vs "vật tư phụ"
+      // Dynamic routing for Materials based on user-configured keywords
       const msgText = update.callback_query?.message?.text || update.callback_query?.message?.caption || "";
       if (runtime.forwardTargets && runtime.forwardTargets.length > 0) {
-        const isVatTuChinh = msgText.toLowerCase().includes("vật tư chính");
-        const isVatTuPhu = msgText.toLowerCase().includes("vật tư phụ");
-
         let matchedTarget: AllowedTopicConfig | undefined;
-        if (isVatTuChinh) {
-          matchedTarget = runtime.forwardTargets.find((t) => t.nodeName.toLowerCase().includes("vật tư chính"))?.target;
-        } else if (isVatTuPhu) {
-          matchedTarget = runtime.forwardTargets.find((t) => t.nodeName.toLowerCase().includes("vật tư phụ"))?.target;
+        let matchedNodeName = "";
+
+        for (const ft of runtime.forwardTargets) {
+          if (ft.keywords) {
+            const keywordsList = ft.keywords
+              .split(",")
+              .map((k) => k.trim().toLowerCase())
+              .filter(Boolean);
+            const hasMatch = keywordsList.some((keyword) => msgText.toLowerCase().includes(keyword));
+            if (hasMatch) {
+              matchedTarget = ft.target;
+              matchedNodeName = ft.nodeName;
+              break;
+            }
+          } else {
+            // Fallback to name-based keyword check for backward compatibility
+            const nodeNameLower = ft.nodeName.toLowerCase();
+            const isVatTuChinh = nodeNameLower.includes("vật tư chính") && msgText.toLowerCase().includes("vật tư chính");
+            const isVatTuPhu = nodeNameLower.includes("vật tư phụ") && msgText.toLowerCase().includes("vật tư phụ");
+            if (isVatTuChinh || isVatTuPhu) {
+              matchedTarget = ft.target;
+              matchedNodeName = ft.nodeName;
+              break;
+            }
+          }
         }
 
         if (matchedTarget) {
           forwardChatId = matchedTarget.chatId;
           forwardThreadId = matchedTarget.threadId;
-          addLog("info", `Routing forward to specific target for: ${isVatTuChinh ? "Vật tư chính" : "Vật tư phụ"}`, update.update_id);
+          addLog("info", `Routing forward to: ${matchedNodeName} (matched keywords)`, update.update_id);
         }
       }
 

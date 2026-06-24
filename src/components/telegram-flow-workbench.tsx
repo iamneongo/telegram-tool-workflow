@@ -581,6 +581,22 @@ const NODE_PALETTE: Array<{
       messageId: "",
     },
   },
+  {
+    id: "forward-vattu",
+    label: "Chuyển tiếp Vật tư",
+    kind: "action",
+    accent: "amber",
+    n8nType: "n8n-nodes-forward-bot-telegram.forwardBotTelegram",
+    typeVersion: 1,
+    detail: "custom node",
+    subtitle: "forwardMessage",
+    parameters: {
+      target: null,
+      destinationChatId: "",
+      sourceChatId: "",
+      messageId: "",
+    },
+  },
 ];
 
 const accentStyles: Record<NodeAccent, { ring: string; glow: string; text: string }> = {
@@ -1061,6 +1077,25 @@ function getTargetFromConfig(configs: N8nNodeConfig[], nodeName: string) {
   return target;
 }
 
+function getTargetFromConfigPrefix(configs: N8nNodeConfig[], prefix: string) {
+  const node = configs.find((config) => config.name.startsWith(prefix));
+  if (!node) return undefined;
+  const target = getTopicSelection(node.parameters);
+  if (!target || !target.chatId) return undefined;
+  return target;
+}
+
+function isForwardOrRejectNode(nodeName: string) {
+  return nodeName.startsWith("Forward Tin nhắn") ||
+         nodeName.startsWith("Chuyển tiếp") ||
+         nodeName.startsWith("Từ chối tin nhắn");
+}
+
+function isTargetConfigurableNode(nodeName: string) {
+  return isForwardOrRejectNode(nodeName) ||
+         nodeName.startsWith("Gửi tin nhắn xác nhận");
+}
+
 function formatTopicSelectionLabel(target: AllowedTopicSelection | null) {
   if (!target) {
     return "Chưa chọn";
@@ -1145,7 +1180,7 @@ function normalizeSubtitle(snapshot: TelegramWorkflowSnapshot | null, config: N8
     return `${formatNumber(getAllowedTopics(config.parameters).length)} selected`;
   }
 
-  if (config.name === "Forward Tin nhắn" || config.name === "Từ chối tin nhắn") {
+  if (isForwardOrRejectNode(config.name) || config.name.startsWith("Gửi tin nhắn xác nhận")) {
     const target = getTopicSelection(config.parameters);
     return target ? formatTopicSelectionLabel(target) : "select target";
   }
@@ -1618,9 +1653,7 @@ export default function TelegramFlowWorkbench() {
     (target: AllowedTopicSelection | null) => {
       if (
         !selectedConfig ||
-        (selectedConfig.name !== "Forward Tin nhắn" &&
-          selectedConfig.name !== "Từ chối tin nhắn" &&
-          selectedConfig.name !== "Gửi tin nhắn xác nhận")
+        (!isTargetConfigurableNode(selectedConfig.name))
       ) {
         return;
       }
@@ -1636,9 +1669,9 @@ export default function TelegramFlowWorkbench() {
             target,
           };
 
-          if (node.name === "Forward Tin nhắn") {
+          if (isForwardOrRejectNode(node.name)) {
             nextParams.destinationChatId = target ? String(target.chatId) : "";
-          } else if (node.name === "Gửi tin nhắn xác nhận") {
+          } else if (node.name.startsWith("Gửi tin nhắn xác nhận")) {
             nextParams.chatId = target ? `=-${Math.abs(target.chatId)}` : "";
             nextParams.additionalFields = {
               ...(nextParams.additionalFields as JsonRecord || {}),
@@ -1662,9 +1695,9 @@ export default function TelegramFlowWorkbench() {
           target,
         };
 
-        if (selectedConfig.name === "Forward Tin nhắn") {
+        if (isForwardOrRejectNode(selectedConfig.name)) {
           nextParams.destinationChatId = target ? String(target.chatId) : "";
-        } else if (selectedConfig.name === "Gửi tin nhắn xác nhận") {
+        } else if (selectedConfig.name.startsWith("Gửi tin nhắn xác nhận")) {
           nextParams.chatId = target ? `=-${Math.abs(target.chatId)}` : "";
           nextParams.additionalFields = {
             ...(nextParams.additionalFields as JsonRecord || {}),
@@ -1702,6 +1735,20 @@ export default function TelegramFlowWorkbench() {
     setRuntimeBusy(true);
     setStatus({ kind: "loading", text: "Starting local workflow" });
 
+    // Collect all forward targets from configs
+    const forwardTargets: Array<{ nodeName: string; target: AllowedTopicSelection }> = [];
+    for (const config of nodeConfigs) {
+      if (isForwardOrRejectNode(config.name)) {
+        const target = getTopicSelection(config.parameters);
+        if (target && target.chatId) {
+          forwardTargets.push({
+            nodeName: config.name,
+            target,
+          });
+        }
+      }
+    }
+
     try {
       const response = await fetch("/api/local-workflow", {
         method: "POST",
@@ -1710,8 +1757,11 @@ export default function TelegramFlowWorkbench() {
           action: "start",
           token: token.trim() || undefined,
           allowedTopics: getAllowedTopicsFromConfigs(nodeConfigs),
-          approvalTarget: getTargetFromConfig(nodeConfigs, "Gửi tin nhắn xác nhận"),
-          forwardTarget: getTargetFromConfig(nodeConfigs, "Forward Tin nhắn"),
+          approvalTarget: getTargetFromConfig(nodeConfigs, "Gửi tin nhắn xác nhận") ||
+                          getTargetFromConfigPrefix(nodeConfigs, "Gửi tin nhắn xác nhận"),
+          forwardTarget: getTargetFromConfig(nodeConfigs, "Forward Tin nhắn") ||
+                         getTargetFromConfigPrefix(nodeConfigs, "Chuyển tiếp"),
+          forwardTargets,
         }),
       });
       const payload = (await response.json()) as { ok: boolean; status?: RuntimeStatus; error?: string };
@@ -2287,7 +2337,7 @@ export default function TelegramFlowWorkbench() {
                     onSelectAll={() => setAllowedTopicsForSelectedNode(availableTopics)}
                     onClear={() => setAllowedTopicsForSelectedNode([])}
                   />
-                ) : selectedConfig.name === "Forward Tin nhắn" || selectedConfig.name === "Từ chối tin nhắn" || selectedConfig.name === "Gửi tin nhắn xác nhận" ? (
+                ) : isTargetConfigurableNode(selectedConfig.name) ? (
                   <TopicTargetPicker
                     topics={availableTopics}
                     value={getTopicSelection(selectedConfig.parameters)}

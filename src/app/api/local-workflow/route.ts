@@ -15,6 +15,7 @@ type RequestBody = {
   allowedTopics?: AllowedTopicConfig[];
   approvalTarget?: AllowedTopicConfig;
   forwardTarget?: AllowedTopicConfig;
+  forwardTargets?: any[];
 };
 
 function getToken(body: RequestBody) {
@@ -36,6 +37,7 @@ export async function POST(request: Request) {
         allowedTopics: body.allowedTopics,
         approvalTarget: body.approvalTarget,
         forwardTarget: body.forwardTarget,
+        forwardTargets: body.forwardTargets,
       });
       return NextResponse.json({ ok: true, status });
     }

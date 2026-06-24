@@ -80,6 +80,12 @@ type LocalWorkflowRuntime = {
   lastExecution: RuntimeExecution | null;
   approvalTarget?: AllowedTopicConfig;
   forwardTarget?: AllowedTopicConfig;
+  forwardTargets?: TargetWithNodeName[];
+};
+
+export type TargetWithNodeName = {
+  nodeName: string;
+  target: AllowedTopicConfig;
 };
 
 export type LocalWorkflowStatus = Omit<LocalWorkflowRuntime, "timer" | "token"> & {
@@ -91,6 +97,7 @@ type StartOptions = {
   allowedTopics?: AllowedTopicConfig[];
   approvalTarget?: AllowedTopicConfig;
   forwardTarget?: AllowedTopicConfig;
+  forwardTargets?: TargetWithNodeName[];
 };
 
 const defaultAllowedTopics: AllowedTopicConfig[] = [];
@@ -603,8 +610,28 @@ async function processUpdate(update: TelegramUpdate) {
     markStep(nodeNames.approvalDecision, "success", parsed.action === "approve" ? "Nhánh duyệt." : "Nhánh từ chối.");
 
     if (parsed.action === "approve") {
-      const forwardChatId = runtime.forwardTarget?.chatId ?? forwardDestinationChatId;
-      const forwardThreadId = runtime.forwardTarget ? runtime.forwardTarget.threadId : null;
+      let forwardChatId = runtime.forwardTarget?.chatId ?? forwardDestinationChatId;
+      let forwardThreadId = runtime.forwardTarget ? runtime.forwardTarget.threadId : null;
+
+      // Dynamic routing for Materials: "vật tư chính" vs "vật tư phụ"
+      const msgText = update.callback_query?.message?.text || update.callback_query?.message?.caption || "";
+      if (runtime.forwardTargets && runtime.forwardTargets.length > 0) {
+        const isVatTuChinh = msgText.toLowerCase().includes("vật tư chính");
+        const isVatTuPhu = msgText.toLowerCase().includes("vật tư phụ");
+
+        let matchedTarget: AllowedTopicConfig | undefined;
+        if (isVatTuChinh) {
+          matchedTarget = runtime.forwardTargets.find((t) => t.nodeName.toLowerCase().includes("vật tư chính"))?.target;
+        } else if (isVatTuPhu) {
+          matchedTarget = runtime.forwardTargets.find((t) => t.nodeName.toLowerCase().includes("vật tư phụ"))?.target;
+        }
+
+        if (matchedTarget) {
+          forwardChatId = matchedTarget.chatId;
+          forwardThreadId = matchedTarget.threadId;
+          addLog("info", `Routing forward to specific target for: ${isVatTuChinh ? "Vật tư chính" : "Vật tư phụ"}`, update.update_id);
+        }
+      }
 
       await runStep(nodeNames.approve, () => editCallbackButtons(update), "Ẩn nút đồng ý/không đồng ý.");
       await runStep(nodeNames.forward, () =>
@@ -711,6 +738,7 @@ export async function startLocalWorkflow(options: StartOptions) {
   runtime.allowedTopics = normalizeAllowedTopics(options.allowedTopics);
   runtime.approvalTarget = options.approvalTarget;
   runtime.forwardTarget = options.forwardTarget;
+  runtime.forwardTargets = options.forwardTargets;
   runtime.active = true;
   runtime.startedAt = new Date().toISOString();
   runtime.stoppedAt = null;
@@ -756,5 +784,6 @@ export function getLocalWorkflowStatus(): LocalWorkflowStatus {
     hasToken: Boolean(runtime.token),
     approvalTarget: runtime.approvalTarget,
     forwardTarget: runtime.forwardTarget,
+    forwardTargets: runtime.forwardTargets,
   };
 }

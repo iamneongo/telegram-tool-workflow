@@ -228,6 +228,11 @@ function topicDisplayName(message: TelegramMessage, threadId: number, existingTi
   return `Topic #${threadId}`;
 }
 
+function isPlaceholderTopicName(topicName: string, threadId: number) {
+  const trimmed = topicName.trim();
+  return trimmed === "" || trimmed === `Topic ${threadId}` || trimmed === `Topic #${threadId}`;
+}
+
 function recordSource(sources: Set<string>, source: string) {
   if (source) {
     sources.add(source);
@@ -571,14 +576,30 @@ function buildUniqueTopics(rows: TelegramWorkflowRow[]) {
       continue;
     }
     const key = `${row.chatId}:${row.topicId}`;
-    if (!topics.has(key)) {
+    const existing = topics.get(key);
+    const nextTopicName = row.topicName.trim();
+
+    if (!existing) {
       topics.set(key, {
         chatId: row.chatId,
         threadId: row.topicId,
         chatTitle: row.chatTitle,
-        topicName: row.topicName,
+        topicName: nextTopicName,
       });
+      continue;
     }
+
+    topics.set(key, {
+      chatId: row.chatId,
+      threadId: row.topicId,
+      chatTitle: row.chatTitle || existing.chatTitle,
+      topicName:
+        !isPlaceholderTopicName(nextTopicName, row.topicId)
+          ? nextTopicName
+          : !isPlaceholderTopicName(existing.topicName, row.topicId)
+            ? existing.topicName
+            : nextTopicName || existing.topicName,
+    });
   }
   return Array.from(topics.values());
 }

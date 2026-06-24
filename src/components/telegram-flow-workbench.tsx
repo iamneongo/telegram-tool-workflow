@@ -9,6 +9,8 @@ import {
   BriefcaseIcon,
   ChatBubbleBottomCenterTextIcon,
   CheckCircleIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
   Cog6ToothIcon,
   PaperAirplaneIcon,
   PencilSquareIcon,
@@ -26,7 +28,9 @@ import {
   MarkerType,
   Position,
   ReactFlow,
+  applyNodeChanges,
   type Edge,
+  type NodeChange,
   type ReactFlowInstance,
   type Node,
   type NodeProps,
@@ -470,6 +474,42 @@ const WORKFLOW_TEMPLATE: N8nWorkflowTemplate = {
       },
       webhookId: "41258947-bbb1-48e7-87cc-06ca4115ec4e",
     },
+    {
+      id: "supplier-confirmation-node",
+      name: "Xác nhận nhà cung ứng",
+      n8nType: "n8n-nodes-base.telegram",
+      typeVersion: 1.2,
+      position: [-2504, -1408],
+      kind: "action",
+      accent: "amber",
+      subtitle: "sendMessage force_reply",
+      detail: "telegram",
+      parameters: {
+        target: null,
+      },
+      credentials: {
+        telegramApi: { id: "YMPFyCqpGYxi4sgz", name: "Telegram account" },
+      },
+      webhookId: "supplier-confirmation-webhook",
+    },
+    {
+      id: "inspection-material-node",
+      name: "Nghiệm thu vật tư",
+      n8nType: "n8n-nodes-base.telegram",
+      typeVersion: 1.2,
+      position: [-2260, -1264],
+      kind: "action",
+      accent: "emerald",
+      subtitle: "sendMessage",
+      detail: "telegram",
+      parameters: {
+        target: null,
+      },
+      credentials: {
+        telegramApi: { id: "YMPFyCqpGYxi4sgz", name: "Telegram account" },
+      },
+      webhookId: "inspection-material-webhook",
+    },
   ],
   connections: {
     "Telegram Trigger": {
@@ -502,6 +542,8 @@ const WORKFLOW_TEMPLATE: N8nWorkflowTemplate = {
     "Forward Tin nhắn": { main: [[]] },
     "Từ chối tin nhắn": { main: [[]] },
     "Gửi tin nhắn xác nhận": { main: [[]] },
+    "Xác nhận nhà cung ứng": { main: [[]] },
+    "Nghiệm thu vật tư": { main: [[]] },
   },
 };
 
@@ -643,6 +685,32 @@ const NODE_PALETTE: Array<{
       target: null,
     },
   },
+  {
+    id: "supplier-confirmation",
+    label: "Xác nhận nhà cung ứng",
+    kind: "action",
+    accent: "amber",
+    n8nType: "n8n-nodes-base.telegram",
+    typeVersion: 1.2,
+    detail: "telegram",
+    subtitle: "sendMessage force_reply",
+    parameters: {
+      target: null,
+    },
+  },
+  {
+    id: "inspection-material",
+    label: "Nghiệm thu vật tư",
+    kind: "action",
+    accent: "emerald",
+    n8nType: "n8n-nodes-base.telegram",
+    typeVersion: 1.2,
+    detail: "telegram",
+    subtitle: "sendMessage",
+    parameters: {
+      target: null,
+    },
+  },
 ];
 
 const accentStyles: Record<NodeAccent, { ring: string; glow: string; text: string }> = {
@@ -681,6 +749,8 @@ const NODE_DISPLAY_NAMES: Record<string, string> = {
   "Forward Tin nhắn": "Chuyển tiếp",
   "Từ chối tin nhắn": "Báo từ chối",
   "Gửi tin nhắn xác nhận": "Gửi xin duyệt",
+  "Xác nhận nhà cung ứng": "Xác nhận nhà cung ứng",
+  "Nghiệm thu vật tư": "Nghiệm thu vật tư",
 };
 
 function getNodeDisplayName(name: string) {
@@ -713,6 +783,10 @@ function getNodeSetupSummary(name: string) {
       return "Chọn nơi gửi thông báo từ chối";
     case "Gửi tin nhắn xác nhận":
       return "Gửi tin nhắn xác nhận vào group/topic";
+    case "Xác nhận nhà cung ứng":
+      return "Chọn group/topic xác nhận nhà cung ứng";
+    case "Nghiệm thu vật tư":
+      return "Chọn group/topic nghiệm thu vật tư";
     default:
       return "Đã thiết lập sẵn";
   }
@@ -726,6 +800,8 @@ function NodeHeroIcon({ data }: { data: WorkflowNodeData }) {
   if (data.kind === "condition") return <ArrowPathRoundedSquareIcon aria-hidden="true" className={className} />;
   if (sourceName.includes("Đồng ý")) return <CheckCircleIcon aria-hidden="true" className={className} />;
   if (sourceName.includes("Từ chối")) return <XCircleIcon aria-hidden="true" className={className} />;
+  if (sourceName.includes("nhà cung ứng")) return <BriefcaseIcon aria-hidden="true" className={className} />;
+  if (sourceName.includes("Nghiệm thu")) return <CheckCircleIcon aria-hidden="true" className={className} />;
   if (sourceName.includes("Forward")) return <ArrowRightIcon aria-hidden="true" className={className} />;
   if (sourceName.includes("Gửi") || sourceName.includes("Lấy")) {
     return <ChatBubbleBottomCenterTextIcon aria-hidden="true" className={className} />;
@@ -761,6 +837,16 @@ function getPaletteIcon(itemId: string) {
       return {
         bg: "bg-[#FF9500]/15 border-[#FF9500]/30 text-[#FF9500] shadow-[0_2px_10px_rgba(255,149,0,0.12)]",
         icon: <BriefcaseIcon className={sizeClass} />,
+      };
+    case "supplier-confirmation":
+      return {
+        bg: "bg-amber-500/15 border-amber-500/30 text-amber-300 shadow-[0_2px_10px_rgba(245,158,11,0.12)]",
+        icon: <BriefcaseIcon className={sizeClass} />,
+      };
+    case "inspection-material":
+      return {
+        bg: "bg-emerald-500/15 border-emerald-500/30 text-emerald-300",
+        icon: <CheckCircleIcon className={sizeClass} />,
       };
     default:
       return {
@@ -921,6 +1007,23 @@ function createEdges(configs: N8nNodeConfig[]): Edge[] {
       }),
     );
   });
+}
+
+function mergeEdgesWithTemplate(existingEdges: Edge[], configs: N8nNodeConfig[]) {
+  const templateEdges = createEdges(configs);
+  const existingKeys = new Set(
+    existingEdges.map((edge) => `${edge.source}:${edge.target}:${edge.sourceHandle ?? ""}:${edge.targetHandle ?? ""}`),
+  );
+
+  const merged = [...existingEdges];
+  for (const edge of templateEdges) {
+    const key = `${edge.source}:${edge.target}:${edge.sourceHandle ?? ""}:${edge.targetHandle ?? ""}`;
+    if (!existingKeys.has(key)) {
+      merged.push(edge);
+    }
+  }
+
+  return merged;
 }
 
 function formatNumber(value: number | null | undefined) {
@@ -1175,9 +1278,19 @@ function isForwardOrRejectNode(nodeName: string) {
          nodeName.startsWith("Không có vật tư");
 }
 
+function isSupplierConfirmationNode(nodeName: string) {
+  return nodeName.startsWith("Xác nhận nhà cung ứng");
+}
+
+function isInspectionMaterialNode(nodeName: string) {
+  return nodeName.startsWith("Nghiệm thu vật tư");
+}
+
 function isTargetConfigurableNode(nodeName: string) {
   return isForwardOrRejectNode(nodeName) ||
-         nodeName.startsWith("Gửi tin nhắn xác nhận");
+         nodeName.startsWith("Gửi tin nhắn xác nhận") ||
+         isSupplierConfirmationNode(nodeName) ||
+         isInspectionMaterialNode(nodeName);
 }
 
 function formatTopicSelectionLabel(target: AllowedTopicSelection | null) {
@@ -1185,16 +1298,14 @@ function formatTopicSelectionLabel(target: AllowedTopicSelection | null) {
     return "Chưa chọn";
   }
 
-  return target.threadId === null ? target.chatTitle : `${target.chatTitle} / ${formatTopicDisplayName(target.topicName)}`;
+  return target.threadId === null ? target.chatTitle : `${target.chatTitle} / Topic #${target.threadId}`;
 }
 
-function formatTopicDisplayName(topicName: string) {
-  const value = topicName.trim();
-  if (!value) {
-    return "Topic";
+function formatTopicDisplayName(_topicName: string, threadId: number | null) {
+  if (threadId === null) {
+    return "All messages";
   }
-
-  return value;
+  return `Topic #${threadId}`;
 }
 
 function mergeWorkflowSnapshots(
@@ -1211,7 +1322,26 @@ function mergeWorkflowSnapshots(
 
   const topics = new Map<string, TelegramWorkflowSnapshot["topics"][number]>();
   for (const topic of previous.topics) topics.set(`${topic.chatId}:${topic.threadId}`, topic);
-  for (const topic of next.topics) topics.set(`${topic.chatId}:${topic.threadId}`, topic);
+  for (const topic of next.topics) {
+    const key = `${topic.chatId}:${topic.threadId}`;
+    const existing = topics.get(key);
+    if (!existing) {
+      topics.set(key, topic);
+      continue;
+    }
+
+    topics.set(key, {
+      ...existing,
+      ...topic,
+      chatTitle: topic.chatTitle || existing.chatTitle,
+      topicName:
+        !isPlaceholderTopicName(topic.topicName, topic.threadId)
+          ? topic.topicName
+          : !isPlaceholderTopicName(existing.topicName, existing.threadId)
+            ? existing.topicName
+            : topic.topicName.trim() || existing.topicName,
+    });
+  }
 
   const updates = new Map<number, TelegramWorkflowSnapshot["updates"][number]>();
   for (const update of previous.updates) updates.set(update.updateId, update);
@@ -1269,7 +1399,7 @@ function normalizeSubtitle(snapshot: TelegramWorkflowSnapshot | null, config: N8
     return `${formatNumber(mappings.length)} luồng phân loại`;
   }
 
-  if (isForwardOrRejectNode(config.name) || config.name.startsWith("Gửi tin nhắn xác nhận")) {
+  if (isForwardOrRejectNode(config.name) || config.name.startsWith("Gửi tin nhắn xác nhận") || isSupplierConfirmationNode(config.name) || isInspectionMaterialNode(config.name)) {
     const target = getTopicSelection(config.parameters);
     return target ? formatTopicSelectionLabel(target) : "select target";
   }
@@ -1300,9 +1430,18 @@ function normalizeSubtitle(snapshot: TelegramWorkflowSnapshot | null, config: N8
       return `pending ${formatNumber(snapshot.webhook.pending_update_count)}`;
     case "Gửi tin nhắn xác nhận":
       return `${formatNumber(snapshot.topics.length)} topics`;
+    case "Xác nhận nhà cung ứng":
+      return `${formatNumber(snapshot.topics.length)} topics`;
+    case "Nghiệm thu vật tư":
+      return `${formatNumber(snapshot.topics.length)} topics`;
     default:
       return getParameterSubtitle(config.parameters, config.subtitle);
   }
+}
+
+function isPlaceholderTopicName(topicName: string, threadId: number) {
+  const trimmed = topicName.trim();
+  return trimmed === "" || trimmed === `Topic ${threadId}` || trimmed === `Topic #${threadId}`;
 }
 
 function createDroppedNodeConfig(templateId: string, index: number): N8nNodeConfig | null {
@@ -1350,12 +1489,62 @@ export default function TelegramFlowWorkbench() {
     Object.fromEntries(WORKFLOW_TEMPLATE.nodes.map((node) => [node.id, stringifyJson(node.parameters)])),
   );
   const [selectedNodeId, setSelectedNodeId] = useState<string>("9bfb1a1e-2ae7-41f8-aa01-c8bb9a90a1de");
-  const [nodes, setNodes, onNodesChange] = useNodesState<WorkflowNode>(createNodes(WORKFLOW_TEMPLATE.nodes));
+  const [nodes, setNodes] = useNodesState<WorkflowNode>(createNodes(WORKFLOW_TEMPLATE.nodes));
   const [edges, setEdges, onEdgesChange] = useEdgesState(createEdges(WORKFLOW_TEMPLATE.nodes));
   const [toast, setToast] = useState<string | null>(null);
   const [flowInstance, setFlowInstance] = useState<ReactFlowInstance<WorkflowNode, Edge> | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const [hydrated, setHydrated] = useState(false);
+
+  const ensureBuiltinNodes = useCallback((configs: N8nNodeConfig[]): N8nNodeConfig[] => {
+    const nextConfigs = [...configs];
+    const builtins = [
+      {
+        name: "Xác nhận nhà cung ứng",
+        templateId: "supplier-confirmation",
+        id: "supplier-confirmation-node",
+        position: [-2504, -1408] as [number, number],
+        webhookId: "supplier-confirmation-webhook",
+      },
+      {
+        name: "Nghiệm thu vật tư",
+        templateId: "inspection-material",
+        id: "inspection-material-node",
+        position: [-2260, -1264] as [number, number],
+        webhookId: "inspection-material-webhook",
+      },
+    ];
+
+    for (const builtin of builtins) {
+      if (nextConfigs.some((config) => config.name === builtin.name)) {
+        continue;
+      }
+
+      const template = NODE_PALETTE.find((item) => item.id === builtin.templateId);
+      if (!template) {
+        continue;
+      }
+
+      nextConfigs.push({
+        id: builtin.id,
+        name: template.label,
+        n8nType: template.n8nType,
+        typeVersion: template.typeVersion,
+        position: builtin.position,
+        kind: template.kind,
+        accent: template.accent,
+        subtitle: template.subtitle,
+        detail: template.detail,
+        parameters: structuredClone(template.parameters),
+        credentials: {
+          telegramApi: { id: "YMPFyCqpGYxi4sgz", name: "Telegram account" },
+        },
+        webhookId: builtin.webhookId,
+      });
+    }
+
+    return nextConfigs;
+  }, []);
 
   const inFlightRef = useRef(false);
   const intervalRef = useRef<number | null>(null);
@@ -1581,10 +1770,10 @@ export default function TelegramFlowWorkbench() {
         setWorkflowActive(Boolean((state.ui.runtimeStatus as RuntimeStatus | null)?.active));
 
         if (payload.exists) {
-          const loadedNodeConfigs = state.ui.nodeConfigs as N8nNodeConfig[];
+          const loadedNodeConfigs = ensureBuiltinNodes(state.ui.nodeConfigs as N8nNodeConfig[]);
           setNodeConfigs(loadedNodeConfigs);
           setNodes(createNodes(loadedNodeConfigs));
-          setEdges(state.ui.edges as Edge[]);
+          setEdges(mergeEdgesWithTemplate(state.ui.edges as Edge[], loadedNodeConfigs));
           setParameterDrafts(
             Object.fromEntries(loadedNodeConfigs.map((node) => [node.id, stringifyJson(node.parameters)])),
           );
@@ -1603,7 +1792,7 @@ export default function TelegramFlowWorkbench() {
     return () => {
       cancelled = true;
     };
-  }, [setEdges, setNodes]);
+  }, [ensureBuiltinNodes, setEdges, setNodes]);
 
   const syncNodes = useCallback(
     (configs: N8nNodeConfig[], nextSnapshot: TelegramWorkflowSnapshot | null) => {
@@ -1722,6 +1911,35 @@ export default function TelegramFlowWorkbench() {
     event.dataTransfer.dropEffect = "copy";
   }, []);
 
+  const handleNodesChange = useCallback(
+    (changes: NodeChange<WorkflowNode>[]) => {
+      setNodes((current) => applyNodeChanges(changes, current));
+
+      const removedIds = changes
+        .filter((change) => change.type === "remove")
+        .map((change) => change.id);
+
+      if (removedIds.length === 0) {
+        return;
+      }
+
+      setNodeConfigs((configs) => configs.filter((config) => !removedIds.includes(config.id)));
+      setParameterDrafts((drafts) => {
+        const nextDrafts = { ...drafts };
+        for (const removedId of removedIds) {
+          delete nextDrafts[removedId];
+        }
+        return nextDrafts;
+      });
+
+      if (removedIds.includes(selectedNodeId)) {
+        setSelectedNodeId("");
+        setConfigOpen(false);
+      }
+    },
+    [selectedNodeId, setNodes],
+  );
+
   const handleNodeDragStop = useCallback((_: MouseEvent | TouchEvent, node: WorkflowNode) => {
     setNodeConfigs((current) =>
       current.map((config) => (config.id === node.id ? { ...config, position: fromCanvasPosition(node.position) } : config)),
@@ -1783,7 +2001,7 @@ export default function TelegramFlowWorkbench() {
 
           if (isForwardOrRejectNode(node.name)) {
             nextParams.destinationChatId = target ? String(target.chatId) : "";
-          } else if (node.name.startsWith("Gửi tin nhắn xác nhận")) {
+          } else if (node.name.startsWith("Gửi tin nhắn xác nhận") || isSupplierConfirmationNode(node.name) || isInspectionMaterialNode(node.name)) {
             nextParams.chatId = target ? `=-${Math.abs(target.chatId)}` : "";
             nextParams.additionalFields = {
               ...(nextParams.additionalFields as JsonRecord || {}),
@@ -1809,7 +2027,7 @@ export default function TelegramFlowWorkbench() {
 
         if (isForwardOrRejectNode(selectedConfig.name)) {
           nextParams.destinationChatId = target ? String(target.chatId) : "";
-        } else if (selectedConfig.name.startsWith("Gửi tin nhắn xác nhận")) {
+        } else if (selectedConfig.name.startsWith("Gửi tin nhắn xác nhận") || isSupplierConfirmationNode(selectedConfig.name) || isInspectionMaterialNode(selectedConfig.name)) {
           nextParams.chatId = target ? `=-${Math.abs(target.chatId)}` : "";
           nextParams.additionalFields = {
             ...(nextParams.additionalFields as JsonRecord || {}),
@@ -1941,7 +2159,7 @@ export default function TelegramFlowWorkbench() {
     // Collect all forward targets from configs
     const forwardTargets: Array<{ nodeName: string; target: AllowedTopicSelection; keywords?: string }> = [];
     for (const config of nodeConfigs) {
-      if (isForwardOrRejectNode(config.name)) {
+      if (isForwardOrRejectNode(config.name) || isSupplierConfirmationNode(config.name) || isInspectionMaterialNode(config.name) || config.name.startsWith("Gửi tin nhắn xác nhận")) {
         if (config.parameters.mappings && Array.isArray(config.parameters.mappings)) {
           for (const mapping of config.parameters.mappings) {
             if (mapping.target && mapping.target.chatId) {
@@ -2252,6 +2470,9 @@ export default function TelegramFlowWorkbench() {
         : status.kind === "loading"
           ? "text-sky-300"
           : "text-white/60";
+  const backgroundDots = "rgba(255,255,255,0.055)";
+  const edgeStroke = "rgba(203, 213, 225, 0.42)";
+  const edgeArrow = "rgba(203, 213, 225, 0.42)";
 
   return (
     <main className="relative min-h-dvh overflow-hidden bg-[#101010] text-white">
@@ -2261,7 +2482,7 @@ export default function TelegramFlowWorkbench() {
         <ReactFlow
           nodes={visualNodes}
           edges={visualEdges}
-          onNodesChange={onNodesChange}
+          onNodesChange={handleNodesChange}
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}
           onInit={setFlowInstance}
@@ -2296,20 +2517,20 @@ export default function TelegramFlowWorkbench() {
           className="h-full w-full"
           defaultEdgeOptions={{
             type: "smoothstep",
-            style: { stroke: "rgba(203, 213, 225, 0.42)", strokeWidth: 1.35 },
-            markerEnd: { type: MarkerType.ArrowClosed, color: "rgba(203, 213, 225, 0.42)" },
+          style: { stroke: edgeStroke, strokeWidth: 1.35 },
+            markerEnd: { type: MarkerType.ArrowClosed, color: edgeArrow },
           }}
         >
-          <Background variant={BackgroundVariant.Dots} gap={16} size={1} color="rgba(255,255,255,0.055)" />
+          <Background variant={BackgroundVariant.Dots} gap={16} size={1} color={backgroundDots} />
         </ReactFlow>
       </div>
 
       <div className="pointer-events-none absolute left-6 top-6 z-20 flex max-w-[calc(100vw-3rem)] flex-wrap items-center gap-2">
-        <div className="pointer-events-auto rounded-[8px] border border-white/10 bg-[#151516]/92 px-4 py-3 shadow-[0_20px_70px_rgba(0,0,0,0.35)] backdrop-blur-xl">
+        <div className="pointer-events-auto rounded-[8px] border border-white/10 bg-[#151516]/94 px-4 py-3 shadow-[0_20px_70px_rgba(0,0,0,0.35)] backdrop-blur-xl">
           <div className="flex items-center justify-between gap-6">
             <div className="min-w-[180px] max-w-[220px]">
               <div className="text-[10px] uppercase tracking-[0.28em] text-white/35">Workflow</div>
-              <div className="truncate text-sm font-medium text-white/85">{WORKFLOW_TEMPLATE.name}</div>
+              <div className="truncate text-sm font-medium text-white">{WORKFLOW_TEMPLATE.name}</div>
             </div>
             <div className="flex items-center gap-2">
               <button
@@ -2341,7 +2562,7 @@ export default function TelegramFlowWorkbench() {
                 title="Settings"
                 className={[
                   "flex h-9 w-9 items-center justify-center rounded-[6px] border transition",
-                  settingsOpen ? "border-sky-400/30 bg-sky-400/15 text-sky-300" : "border-white/10 bg-white/5 text-white/70 hover:bg-white/10 hover:text-white",
+                  settingsOpen ? "border-sky-400/30 bg-sky-400/15 text-sky-300" : "border-white/10 bg-white/5 text-white/35 hover:bg-white/10 hover:text-white",
                 ].join(" ")}
               >
                 <Cog6ToothIcon className="h-5 w-5" />
@@ -2355,7 +2576,7 @@ export default function TelegramFlowWorkbench() {
                 title="Nodes Palette"
                 className={[
                   "flex h-9 w-9 items-center justify-center rounded-[6px] border transition",
-                  paletteOpen ? "border-emerald-400/30 bg-emerald-400/15 text-emerald-300" : "border-white/10 bg-white/5 text-white/70 hover:bg-white/10 hover:text-white",
+                  paletteOpen ? "border-emerald-400/30 bg-emerald-400/15 text-emerald-300" : "border-white/10 bg-white/5 text-white/35 hover:bg-white/10 hover:text-white",
                 ].join(" ")}
               >
                 <SquaresPlusIcon className="h-5 w-5" />
@@ -2366,7 +2587,7 @@ export default function TelegramFlowWorkbench() {
                 title="Node Settings"
                 className={[
                   "flex h-9 w-9 items-center justify-center rounded-[6px] border transition",
-                  configOpen ? "border-amber-400/30 bg-amber-400/15 text-amber-300" : "border-white/10 bg-white/5 text-white/70 hover:bg-white/10 hover:text-white",
+                  configOpen ? "border-amber-400/30 bg-amber-400/15 text-amber-300" : "border-white/10 bg-white/5 text-white/35 hover:bg-white/10 hover:text-white",
                 ].join(" ")}
               >
                 <AdjustmentsHorizontalIcon className="h-5 w-5" />
@@ -2393,7 +2614,7 @@ export default function TelegramFlowWorkbench() {
       ) : null}
 
       {settingsOpen ? (
-        <div className="pointer-events-auto absolute left-6 top-[108px] z-30 w-[360px] rounded-[8px] border border-white/10 bg-[#151516]/96 p-4 shadow-[0_24px_80px_rgba(0,0,0,0.42)] backdrop-blur-xl">
+        <div className="pointer-events-auto absolute left-6 top-[108px] z-30 w-[360px] rounded-[8px] border border-white/10 bg-[#151516]/94 p-4 shadow-[0_24px_80px_rgba(0,0,0,0.42)] backdrop-blur-xl">
           <div className="flex items-start justify-between gap-3">
             <div>
               <div className="text-[10px] uppercase tracking-[0.28em] text-white/35">Settings</div>
@@ -2404,7 +2625,7 @@ export default function TelegramFlowWorkbench() {
               onClick={() => setSettingsOpen(false)}
               aria-label="Đóng"
               title="Đóng"
-              className="flex h-8 w-8 items-center justify-center rounded-[6px] border border-white/10 bg-white/5 text-white/70 transition hover:bg-white/10 hover:text-white"
+              className="flex h-8 w-8 items-center justify-center rounded-[6px] border border-white/10 bg-white/5 text-white/35 transition hover:bg-white/10 hover:text-white"
             >
               <XMarkIcon aria-hidden="true" className="h-4 w-4" />
             </button>
@@ -2417,7 +2638,7 @@ export default function TelegramFlowWorkbench() {
                 value={token}
                 onChange={(event) => setToken(event.target.value)}
                 placeholder="env token"
-                className="mt-1 h-10 w-full rounded-[6px] border border-white/10 bg-white/5 px-3 text-[12px] text-white outline-none placeholder:text-white/25 focus:border-sky-400/40"
+                className="mt-1 h-10 w-full rounded-[6px] border border-white/10 bg-white/5 px-3 text-[12px] text-white outline-none placeholder:text-white/35 focus:border-sky-400/40"
               />
             </label>
 
@@ -2449,7 +2670,7 @@ export default function TelegramFlowWorkbench() {
               >
                 {probeBusy ? "Probing" : workflowActive ? "Stop to probe" : "Probe inventory"}
               </button>
-              <div className="rounded-[6px] border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] leading-5 text-white/48">
+              <div className="rounded-[6px] border border-white/10 bg-white/5 px-3 py-2 text-[11px] leading-5 text-white/35">
                 Gửi thử rồi xoá ngay để ghi nhớ group thực tế.
               </div>
             </div>
@@ -2480,7 +2701,7 @@ export default function TelegramFlowWorkbench() {
               </div>
             ) : null}
             {runtimeStatus?.logs.length ? (
-              <div className="max-h-36 overflow-auto rounded-[6px] border border-white/10 bg-white/[0.03] p-2">
+              <div className="max-h-36 overflow-auto rounded-[6px] border border-white/10 bg-white/5 p-2">
                 {runtimeStatus.logs.slice(0, 5).map((log) => (
                   <div key={`${log.at}-${log.updateId ?? log.message}`} className="py-1 text-[11px] leading-4 text-white/64">
                     <span className="text-white/35">{new Date(log.at).toLocaleTimeString()}</span> {log.message}
@@ -2504,12 +2725,13 @@ export default function TelegramFlowWorkbench() {
               onClick={() => setPaletteOpen(false)}
               aria-label="Đóng"
               title="Đóng"
-              className="flex h-8 w-8 items-center justify-center rounded-[6px] border border-white/10 bg-white/5 text-white/70 transition hover:bg-white/10 hover:text-white"
+              className="flex h-8 w-8 items-center justify-center rounded-[6px] border border-white/10 bg-white/5 text-white/35 transition hover:bg-white/10 hover:text-white"
             >
               <XMarkIcon aria-hidden="true" className="h-4 w-4" />
             </button>
           </div>
-          <div className="mt-3 space-y-2">
+          <div className="mt-3 max-h-[28rem] overflow-auto pr-2">
+            <div className="space-y-2">
             {NODE_PALETTE.map((item) => {
               const style = getPaletteIcon(item.id);
               return (
@@ -2519,14 +2741,14 @@ export default function TelegramFlowWorkbench() {
                   draggable
                   onDragStart={(event) => handleDragStart(event, item.id)}
                   onDoubleClick={() => addNodeFromPalette(item.id, { x: 520 + nodeConfigs.length * 18, y: 420 })}
-                  className="flex w-full items-center gap-3 rounded-[8px] border border-white/10 bg-[#1e1e20]/60 p-2.5 text-left transition hover:border-white/18 hover:bg-[#252528]/80 cursor-grab active:cursor-grabbing"
+                  className="flex w-full cursor-grab items-center gap-3 rounded-[8px] border border-white/10 bg-white/5 p-2.5 text-left transition hover:bg-white/10 active:cursor-grabbing"
                 >
                   <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-[8px] border ${style.bg}`}>
                     {style.icon}
                   </div>
                   <div className="min-w-0 flex-1">
-                    <span className="block truncate text-[12px] font-semibold text-white/90">{item.label}</span>
-                    <span className="block truncate text-[10px] text-white/40 font-mono mt-0.5">{item.n8nType}</span>
+                    <span className="block truncate text-[12px] font-semibold text-white">{item.label}</span>
+                    <span className="mt-0.5 block truncate font-mono text-[10px] text-white/35">{item.n8nType}</span>
                   </div>
                   <div className="shrink-0 flex flex-col items-end justify-center">
                     <span className={`rounded-[4px] px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wider ${
@@ -2540,6 +2762,7 @@ export default function TelegramFlowWorkbench() {
                 </button>
               );
             })}
+            </div>
           </div>
         </div>
       ) : null}
@@ -2549,20 +2772,16 @@ export default function TelegramFlowWorkbench() {
           <div className="pointer-events-auto rounded-[8px] border border-white/10 bg-[#151516]/94 p-4 shadow-[0_24px_80px_rgba(0,0,0,0.42)] backdrop-blur-xl">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
-                <div className="text-[10px] uppercase tracking-[0.28em] text-white/35">Thiết lập</div>
                 <div className="mt-2 truncate text-sm font-medium text-white">
                   {selectedConfig ? getNodeDisplayName(selectedConfig.name) : "Node"}
                 </div>
-                {selectedConfig ? (
-                  <div className="mt-1 text-[12px] leading-5 text-white/48">{getNodeSetupSummary(selectedConfig.name)}</div>
-                ) : null}
               </div>
               <button
                 type="button"
                 onClick={() => setConfigOpen(false)}
                 aria-label="Đóng"
                 title="Đóng"
-                className="flex h-8 w-8 items-center justify-center rounded-[6px] border border-white/10 bg-white/5 text-white/70 transition hover:bg-white/10 hover:text-white"
+                className="flex h-8 w-8 items-center justify-center rounded-[6px] border border-white/10 bg-white/5 text-white/35 transition hover:bg-white/10 hover:text-white"
               >
                 <XMarkIcon aria-hidden="true" className="h-4 w-4" />
               </button>
@@ -2583,7 +2802,7 @@ export default function TelegramFlowWorkbench() {
                 ) : selectedConfig.name.startsWith("Chuyển tiếp Vật tư") ? (
                   <div className="space-y-4">
                     <div className="flex items-center justify-between">
-                      <div className="text-[11px] font-semibold tracking-wider uppercase text-white/45">Danh sách phân luồng (Mappings)</div>
+                      <div className="text-[11px] font-semibold tracking-wider uppercase text-white/35">Danh sách phân luồng (Mappings)</div>
                       <button
                         type="button"
                         onClick={handleAddMappingRow}
@@ -2600,11 +2819,11 @@ export default function TelegramFlowWorkbench() {
                         </div>
                       ) : (
                         ((selectedConfig.parameters.mappings as any[]) || []).map((row, idx) => (
-                          <div key={row.id || idx} className="space-y-2 rounded-[6px] border border-white/10 bg-white/[0.02] p-3 relative">
+                          <div key={row.id || idx} className="relative space-y-2 rounded-[6px] border border-white/10 bg-white/5 p-3">
                             <button
                               type="button"
                               onClick={() => handleRemoveMappingRow(row.id || idx)}
-                              className="absolute top-2 right-2 text-white/35 hover:text-rose-400"
+                              className="absolute right-2 top-2 text-white/35 hover:text-rose-400"
                               title="Xóa dòng"
                             >
                               <XMarkIcon aria-hidden="true" className="h-4 w-4" />
@@ -2617,7 +2836,7 @@ export default function TelegramFlowWorkbench() {
                                 placeholder="Ví dụ: cát, đá, gạch"
                                 value={String(row.keywords || "")}
                                 onChange={(e) => handleUpdateRowKeywords(row.id || idx, e.target.value)}
-                                className="mt-1 w-full rounded-[4px] border border-white/12 bg-black/25 px-2.5 py-1 text-[12px] text-white outline-none focus:border-sky-400/40"
+                                className="mt-1 w-full rounded-[4px] border border-white/10 bg-white/5 px-2.5 py-1 text-[12px] text-white outline-none focus:border-sky-400/40"
                               />
                             </div>
 
@@ -2647,7 +2866,7 @@ export default function TelegramFlowWorkbench() {
                     />
                   </div>
                 ) : (
-                  <div className="rounded-[6px] border border-white/10 bg-white/[0.03] px-3 py-3 text-[12px] leading-5 text-white/68">
+                  <div className="rounded-[6px] border border-white/10 bg-white/5 px-3 py-3 text-[12px] leading-5 text-white/35">
                     Node này đã được cấu hình sẵn. Chỉ cần bấm Start là chạy.
                   </div>
                 )}
@@ -2656,16 +2875,6 @@ export default function TelegramFlowWorkbench() {
           </div>
         </div>
       ) : null}
-
-      <div className="pointer-events-none absolute left-6 bottom-6 z-20 flex items-end gap-3">
-        <div className="pointer-events-auto rounded-[8px] border border-white/10 bg-[#151516]/92 px-4 py-3 shadow-[0_20px_70px_rgba(0,0,0,0.35)] backdrop-blur-xl">
-          <div className="text-[10px] uppercase tracking-[0.24em] text-white/35">Status</div>
-          <div className={["mt-1 text-sm font-medium", statusColor].join(" ")}>{status.text}</div>
-          <div className="mt-1 text-[11px] text-white/35">
-            {snapshot ? `${snapshot.meta.updateCount} update(s)` : selectedNode?.data.title ?? "waiting"}
-          </div>
-        </div>
-      </div>
 
       {toast ? (
         <div className="pointer-events-none absolute bottom-6 left-1/2 z-30 -translate-x-1/2 rounded-[8px] border border-white/10 bg-[#151516]/94 px-4 py-2 text-[12px] text-white shadow-[0_20px_70px_rgba(0,0,0,0.35)]">
@@ -2678,7 +2887,7 @@ export default function TelegramFlowWorkbench() {
 
 function MetaBox({ label, value, valueClassName = "text-white/75" }: { label: string; value: string; valueClassName?: string }) {
   return (
-    <div className="min-w-0 rounded-[6px] border border-white/10 bg-white/[0.03] px-3 py-2">
+    <div className="min-w-0 rounded-[6px] border border-white/10 bg-white/5 px-3 py-2">
       <div className="text-[10px] uppercase tracking-[0.22em] text-white/35">{label}</div>
       <div className={["mt-1 truncate text-[12px]", valueClassName].join(" ")}>{value}</div>
     </div>
@@ -2704,11 +2913,30 @@ function AllowedTopicPicker({
 }) {
   const selectedKeys = new Set(selectedTopics.map(topicKey));
   const groups = groupTopics(topics);
+  const [openGroupIds, setOpenGroupIds] = useState<Set<number>>(() => {
+    const initial = new Set<number>();
+    for (const topic of selectedTopics) {
+      initial.add(topic.chatId);
+    }
+    return initial;
+  });
 
   function toggleTopic(topic: AllowedTopicSelection) {
     const key = topicKey(topic);
     const exists = selectedKeys.has(key);
     onChange(exists ? selectedTopics.filter((item) => topicKey(item) !== key) : [...selectedTopics, topic]);
+  }
+
+  function toggleGroupOpen(chatId: number) {
+    setOpenGroupIds((current) => {
+      const next = new Set(current);
+      if (next.has(chatId)) {
+        next.delete(chatId);
+      } else {
+        next.add(chatId);
+      }
+      return next;
+    });
   }
 
   function toggleGroup(groupTopicsList: AllowedTopicSelection[]) {
@@ -2730,7 +2958,7 @@ function AllowedTopicPicker({
   }
 
   return (
-    <div className="rounded-[6px] border border-white/10 bg-white/[0.03] p-3">
+    <div className="rounded-[6px] border border-white/10 bg-white/5 p-3">
       <div className="flex items-center justify-between gap-3">
         <div>
           <div className="text-[10px] uppercase tracking-[0.22em] text-white/35">Group chat / topic</div>
@@ -2740,14 +2968,14 @@ function AllowedTopicPicker({
           <button
             type="button"
             onClick={onSelectAll}
-            className="h-8 rounded-[6px] border border-white/10 bg-white/5 px-2.5 text-[11px] text-white/75 transition hover:bg-white/10"
+            className="h-8 rounded-[6px] border border-white/10 bg-white/10 px-2.5 text-[11px] text-white/75 transition hover:bg-white/5"
           >
             All
           </button>
           <button
             type="button"
             onClick={onClear}
-            className="h-8 rounded-[6px] border border-white/10 bg-white/5 px-2.5 text-[11px] text-white/75 transition hover:bg-white/10"
+            className="h-8 rounded-[6px] border border-white/10 bg-white/10 px-2.5 text-[11px] text-white/75 transition hover:bg-white/5"
           >
             Clear
           </button>
@@ -2760,9 +2988,10 @@ function AllowedTopicPicker({
         </div>
       ) : null}
 
-      <div className="mt-3 max-h-72 space-y-2 overflow-auto">
+      <div className="mt-3 max-h-72 overflow-auto pr-2">
+        <div className="space-y-2">
         {groups.length === 0 ? (
-          <div className="rounded-[6px] border border-white/10 bg-white/[0.03] px-3 py-3 text-[12px] text-white/45">
+          <div className="rounded-[6px] border border-white/10 bg-white/5 px-3 py-3 text-[12px] text-white/35">
             Chưa có group/topic.
           </div>
         ) : null}
@@ -2770,65 +2999,72 @@ function AllowedTopicPicker({
         {groups.map((group) => {
           const groupSelectedCount = group.topics.filter((topic) => selectedKeys.has(topicKey(topic))).length;
           const allSelected = groupSelectedCount === group.topics.length && group.topics.length > 0;
+          const isOpen = openGroupIds.has(group.chatId);
 
           return (
             <div key={group.chatId} className="overflow-hidden rounded-[6px] border border-white/10 bg-[#101113]">
-              <button
-                type="button"
-                onClick={() => toggleGroup(group.topics)}
-                className={[
-                  "flex w-full items-center justify-between gap-3 px-3 py-2 text-left transition",
-                  allSelected ? "bg-emerald-400/10" : "bg-white/[0.035] hover:bg-white/[0.06]",
-                ].join(" ")}
-              >
-                <span className="min-w-0">
-                  <span className="block truncate text-[12px] font-medium text-white/86">{group.chatTitle}</span>
-                  <span className="block text-[10px] text-white/36">
-                    {formatNumber(groupSelectedCount)}/{formatNumber(group.topics.length)}
-                  </span>
-                </span>
-                <span
+              <div className="flex items-stretch gap-0">
+                <button
+                  type="button"
+                  onClick={() => toggleGroup(group.topics)}
                   className={[
-                    "flex h-4 w-4 shrink-0 items-center justify-center rounded border text-[10px]",
-                    allSelected ? "border-emerald-300/60 bg-emerald-300 text-slate-950" : "border-white/20 bg-white/5 text-transparent",
+                    "min-w-0 flex-1 px-3 py-2 text-left transition",
+                    allSelected ? "bg-emerald-400/10" : "bg-white/5 hover:bg-white/10",
                   ].join(" ")}
                 >
-                  ✓
-                </span>
-              </button>
+                  <span className="block truncate text-[12px] font-medium text-white">{group.chatTitle}</span>
+                  <span className="block text-[10px] text-white/35">
+                    {formatNumber(groupSelectedCount)}/{formatNumber(group.topics.length)}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => toggleGroupOpen(group.chatId)}
+                  className={[
+                    "flex w-10 shrink-0 items-center justify-center border-l border-white/10 transition",
+                    isOpen ? "bg-white/10 text-white/80" : "bg-white/5 text-white/35 hover:bg-white/10 hover:text-white/75",
+                  ].join(" ")}
+                  aria-label={isOpen ? "Thu gọn nhóm" : "Mở nhóm"}
+                >
+                  {isOpen ? <ChevronDownIcon aria-hidden="true" className="h-4 w-4" /> : <ChevronRightIcon aria-hidden="true" className="h-4 w-4" />}
+                </button>
+              </div>
 
-              <div>
-                {group.topics.map((topic) => {
-                  const key = topicKey(topic);
-                  const checked = selectedKeys.has(key);
+              {isOpen ? (
+                <div>
+                  {group.topics.map((topic) => {
+                    const key = topicKey(topic);
+                    const checked = selectedKeys.has(key);
 
-                  return (
-                    <button
-                      key={key}
-                      type="button"
-                      onClick={() => toggleTopic(topic)}
-                      title={topic.threadId === null ? topic.topicName : formatTopicDisplayName(topic.topicName)}
-                      className={[
-                        "grid w-full grid-cols-[20px_1fr] items-center gap-2 border-t border-white/7 px-3 py-2 text-left transition",
-                        checked ? "bg-emerald-400/8" : "hover:bg-white/[0.035]",
-                      ].join(" ")}
-                    >
-                      <span
+                    return (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => toggleTopic(topic)}
+                        title={topic.threadId === null ? topic.topicName : formatTopicDisplayName(topic.topicName, topic.threadId)}
                         className={[
-                          "flex h-4 w-4 items-center justify-center rounded border text-[10px]",
-                          checked ? "border-emerald-300/60 bg-emerald-300 text-slate-950" : "border-white/20 bg-white/5 text-transparent",
+                          "grid w-full grid-cols-[20px_1fr] items-center gap-2 border-t border-white/10 px-3 py-2 text-left transition",
+                          checked ? "bg-emerald-400/8" : "hover:bg-white/5",
                         ].join(" ")}
                       >
-                        ✓
-                      </span>
-                      <span className="min-w-0 truncate text-[12px] text-white/76">{formatTopicDisplayName(topic.topicName)}</span>
-                    </button>
-                  );
-                })}
-              </div>
+                        <span
+                          className={[
+                            "flex h-4 w-4 items-center justify-center rounded border text-[10px]",
+                            checked ? "border-emerald-300/60 bg-emerald-300 text-slate-950" : "border-white/10 bg-white/5 text-transparent",
+                          ].join(" ")}
+                        >
+                          ✓
+                        </span>
+                        <span className="min-w-0 truncate text-[12px] text-white/76">{formatTopicDisplayName(topic.topicName, topic.threadId)}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
             </div>
           );
         })}
+        </div>
       </div>
     </div>
   );
@@ -2849,6 +3085,13 @@ function TopicTargetPicker({
 }) {
   const selectedKey = value ? topicKey(value) : null;
   const groups = buildTopicPickerGroups(topics);
+  const [openGroupIds, setOpenGroupIds] = useState<Set<number>>(() => {
+    const initial = new Set<number>();
+    if (value) {
+      initial.add(value.chatId);
+    }
+    return initial;
+  });
 
   function chooseTopic(topic: AllowedTopicSelection) {
     const key = topicKey(topic);
@@ -2859,8 +3102,20 @@ function TopicTargetPicker({
     onChange(topic);
   }
 
+  function toggleGroupOpen(chatId: number) {
+    setOpenGroupIds((current) => {
+      const next = new Set(current);
+      if (next.has(chatId)) {
+        next.delete(chatId);
+      } else {
+        next.add(chatId);
+      }
+      return next;
+    });
+  }
+
   return (
-    <div className="rounded-[6px] border border-white/10 bg-white/[0.03] p-3">
+    <div className="rounded-[6px] border border-white/10 bg-white/5 p-3">
       <div className="flex items-center justify-between gap-3">
         <div>
           <div className="text-[10px] uppercase tracking-[0.22em] text-white/35">Group chat / topic</div>
@@ -2869,7 +3124,7 @@ function TopicTargetPicker({
         <button
           type="button"
           onClick={onClear}
-          className="h-8 rounded-[6px] border border-white/10 bg-white/5 px-2.5 text-[11px] text-white/75 transition hover:bg-white/10"
+          className="h-8 rounded-[6px] border border-white/10 bg-white/10 px-2.5 text-[11px] text-white/75 transition hover:bg-white/5"
         >
           Clear
         </button>
@@ -2881,9 +3136,10 @@ function TopicTargetPicker({
         </div>
       ) : null}
 
-      <div className="mt-3 max-h-72 space-y-2 overflow-auto">
+      <div className="mt-3 max-h-72 overflow-auto pr-2">
+        <div className="space-y-2">
         {groups.length === 0 ? (
-          <div className="rounded-[6px] border border-white/10 bg-white/[0.03] px-3 py-3 text-[12px] text-white/45">
+          <div className="rounded-[6px] border border-white/10 bg-white/5 px-3 py-3 text-[12px] text-white/35">
             Chưa có group/topic.
           </div>
         ) : null}
@@ -2891,66 +3147,71 @@ function TopicTargetPicker({
         {groups.map((group) => {
           const groupKey = topicKey(group.group);
           const groupSelected = selectedKey === groupKey;
+          const isOpen = openGroupIds.has(group.chatId);
 
           return (
             <div key={group.chatId} className="overflow-hidden rounded-[6px] border border-white/10 bg-[#101113]">
-              <button
-                type="button"
-                onClick={() => chooseTopic(group.group)}
-                className={[
-                  "flex w-full items-center justify-between gap-3 px-3 py-2 text-left transition",
-                  groupSelected ? "bg-sky-400/10" : "bg-white/[0.035] hover:bg-white/[0.06]",
-                ].join(" ")}
-              >
-                <span className="min-w-0">
-                  <span className="block truncate text-[12px] font-medium text-white/86">{group.chatTitle}</span>
-                  <span className="block text-[10px] text-white/36">All messages</span>
-                </span>
-                <span
+              <div className="flex items-stretch gap-0">
+                <button
+                  type="button"
+                  onClick={() => chooseTopic(group.group)}
                   className={[
-                    "flex h-4 w-4 shrink-0 items-center justify-center rounded border text-[10px]",
-                    groupSelected
-                      ? "border-sky-300/60 bg-sky-300 text-slate-950"
-                      : "border-white/20 bg-white/5 text-transparent",
+                    "min-w-0 flex-1 px-3 py-2 text-left transition",
+                    groupSelected ? "bg-sky-400/10" : "bg-white/5 hover:bg-white/10",
                   ].join(" ")}
                 >
-                  ✓
-                </span>
-              </button>
+                  <span className="block truncate text-[12px] font-medium text-white">{group.chatTitle}</span>
+                  <span className="block text-[10px] text-white/35">All messages</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => toggleGroupOpen(group.chatId)}
+                  className={[
+                    "flex w-10 shrink-0 items-center justify-center border-l border-white/10 transition",
+                    isOpen ? "bg-white/10 text-white/80" : "bg-white/5 text-white/35 hover:bg-white/10 hover:text-white/75",
+                  ].join(" ")}
+                  aria-label={isOpen ? "Thu gọn nhóm" : "Mở nhóm"}
+                >
+                  {isOpen ? <ChevronDownIcon aria-hidden="true" className="h-4 w-4" /> : <ChevronRightIcon aria-hidden="true" className="h-4 w-4" />}
+                </button>
+              </div>
 
-              <div>
-                {group.topics.map((topic) => {
-                  const key = topicKey(topic);
-                  const checked = selectedKey === key;
+              {isOpen ? (
+                <div>
+                  {group.topics.map((topic) => {
+                    const key = topicKey(topic);
+                    const checked = selectedKey === key;
 
-                  return (
-                    <button
-                      key={key}
-                      type="button"
-                      onClick={() => chooseTopic(topic)}
-                      className={[
-                        "grid w-full grid-cols-[20px_1fr] items-center gap-2 border-t border-white/7 px-3 py-2 text-left transition",
-                        checked ? "bg-sky-400/8" : "hover:bg-white/[0.035]",
-                      ].join(" ")}
-                    >
-                      <span
+                    return (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => chooseTopic(topic)}
                         className={[
-                          "flex h-4 w-4 items-center justify-center rounded border text-[10px]",
-                          checked
-                            ? "border-sky-300/60 bg-sky-300 text-slate-950"
-                            : "border-white/20 bg-white/5 text-transparent",
+                          "grid w-full grid-cols-[20px_1fr] items-center gap-2 border-t border-white/10 px-3 py-2 text-left transition",
+                          checked ? "bg-sky-400/8" : "hover:bg-white/5",
                         ].join(" ")}
                       >
-                        ✓
-                      </span>
-                      <span className="min-w-0 truncate text-[12px] text-white/76">{formatTopicDisplayName(topic.topicName)}</span>
-                    </button>
-                  );
-                })}
-              </div>
+                        <span
+                          className={[
+                            "flex h-4 w-4 items-center justify-center rounded border text-[10px]",
+                            checked
+                              ? "border-sky-300/60 bg-sky-300 text-slate-950"
+                              : "border-white/10 bg-white/5 text-transparent",
+                          ].join(" ")}
+                        >
+                          ✓
+                        </span>
+                        <span className="min-w-0 truncate text-[12px] text-white/76">{formatTopicDisplayName(topic.topicName, topic.threadId)}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
             </div>
           );
         })}
+        </div>
       </div>
     </div>
   );
@@ -3025,3 +3286,4 @@ function getCleanErrorMessage(error: unknown, fallback: string): string {
   }
   return fallback;
 }
+

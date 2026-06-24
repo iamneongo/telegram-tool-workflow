@@ -247,6 +247,11 @@ function topicDisplayName(message: TelegramMessage, threadId: number) {
   );
 }
 
+function isPlaceholderTopicName(topicName: string, threadId: number) {
+  const trimmed = topicName.trim();
+  return trimmed === "" || trimmed === `Topic ${threadId}` || trimmed === `Topic #${threadId}`;
+}
+
 function upsertInventoryGroup(chatId: number, chatTitle: string, chatType: string) {
   const existingIndex = runtime.inventory.groups.findIndex((group) => group.chatId === chatId);
   const nextGroup = { chatId, chatTitle, chatType };
@@ -265,7 +270,14 @@ function upsertInventoryTopic(chatId: number, threadId: number, chatTitle: strin
   const existingIndex = runtime.inventory.topics.findIndex(
     (topic) => topic.chatId === chatId && topic.threadId === threadId,
   );
-  const nextTopic = { chatId, threadId, chatTitle, topicName };
+  const existing = existingIndex >= 0 ? runtime.inventory.topics[existingIndex] : null;
+  const nextTopicName =
+    !isPlaceholderTopicName(topicName, threadId)
+      ? topicName
+      : existing && !isPlaceholderTopicName(existing.topicName, threadId)
+        ? existing.topicName
+        : topicName;
+  const nextTopic = { chatId, threadId, chatTitle, topicName: nextTopicName };
 
   if (existingIndex >= 0) {
     runtime.inventory.topics = runtime.inventory.topics.map((topic, index) =>
@@ -745,6 +757,27 @@ async function processUpdate(update: TelegramUpdate) {
             text: notifyText,
             parse_mode: "HTML",
             reply_to_message_id: sourceMessageId || undefined,
+          })
+        );
+      }
+
+      let inspectionTarget: AllowedTopicConfig | undefined;
+      if (runtime.forwardTargets) {
+        const matchedNode = runtime.forwardTargets.find((ft) => ft.nodeName.startsWith("Nghiệm thu vật tư"));
+        if (matchedNode) {
+          inspectionTarget = matchedNode.target;
+        }
+      }
+
+      if (inspectionTarget) {
+        const inspectionText = `📋 <b>${userName}</b> nghiệm thu vật tư sau xác nhận nhà cung ứng.\n\n${replyText}`;
+        addLog("info", `Routing supplier confirmation reply to inspection target`, update.update_id);
+        await runStep("Gửi nghiệm thu vật tư", () =>
+          telegramRequest(runtime.token, "sendMessage", {
+            chat_id: inspectionTarget!.chatId,
+            message_thread_id: inspectionTarget!.threadId === null ? undefined : inspectionTarget!.threadId,
+            text: inspectionText,
+            parse_mode: "HTML",
           })
         );
       }

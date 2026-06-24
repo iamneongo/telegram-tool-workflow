@@ -24,6 +24,8 @@ import {
   type NodeProps,
   useEdgesState,
   useNodesState,
+  addEdge,
+  type Connection,
 } from "@xyflow/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { TelegramWorkflowSnapshot } from "@/lib/telegram";
@@ -1585,6 +1587,29 @@ export default function TelegramFlowWorkbench() {
     showToast("Đã xóa line connect");
   }, [selectedEdgeId, setEdges, showToast]);
 
+  const onConnect = useCallback(
+    (params: Connection) => {
+      const edgeStyle = {
+        animated: false,
+        type: "smoothstep",
+        style: { stroke: "rgba(184, 193, 212, 0.42)", strokeWidth: 1.35 },
+        markerEnd: { type: MarkerType.ArrowClosed, color: "rgba(184, 193, 212, 0.48)" },
+      };
+
+      setEdges((eds) =>
+        addEdge(
+          {
+            ...params,
+            ...edgeStyle,
+          },
+          eds,
+        ),
+      );
+      showToast("Đã nối line connect");
+    },
+    [setEdges, showToast],
+  );
+
   const handleDragStart = useCallback((event: React.DragEvent<HTMLButtonElement>, templateId: string) => {
     event.dataTransfer.setData("application/x-n8n-node", templateId);
     event.dataTransfer.effectAllowed = "copy";
@@ -2047,6 +2072,7 @@ export default function TelegramFlowWorkbench() {
           edges={visualEdges}
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
+          onConnect={onConnect}
           onInit={setFlowInstance}
           onDrop={handleCanvasDrop}
           onDragOver={handleCanvasDragOver}

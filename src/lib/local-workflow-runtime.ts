@@ -611,15 +611,11 @@ async function processUpdate(update: TelegramUpdate) {
     markStep(nodeNames.approvalDecision, "success", parsed.action === "approve" ? "Nhánh duyệt." : "Nhánh từ chối.");
 
     if (parsed.action === "approve") {
-      let forwardChatId = runtime.forwardTarget?.chatId ?? forwardDestinationChatId;
-      let forwardThreadId = runtime.forwardTarget ? runtime.forwardTarget.threadId : null;
-
       // Dynamic routing for Materials based on user-configured keywords
       const msgText = update.callback_query?.message?.text || update.callback_query?.message?.caption || "";
-      if (runtime.forwardTargets && runtime.forwardTargets.length > 0) {
-        let matchedTarget: AllowedTopicConfig | undefined;
-        let matchedNodeName = "";
+      const matchedTargets: { target: AllowedTopicConfig; nodeName: string }[] = [];
 
+      if (runtime.forwardTargets && runtime.forwardTargets.length > 0) {
         for (const ft of runtime.forwardTargets) {
           if (ft.keywords) {
             const keywordsList = ft.keywords
@@ -628,9 +624,7 @@ async function processUpdate(update: TelegramUpdate) {
               .filter(Boolean);
             const hasMatch = keywordsList.some((keyword) => msgText.toLowerCase().includes(keyword));
             if (hasMatch) {
-              matchedTarget = ft.target;
-              matchedNodeName = ft.nodeName;
-              break;
+              matchedTargets.push({ target: ft.target, nodeName: ft.nodeName });
             }
           } else {
             // Fallback to name-based keyword check for backward compatibility
@@ -638,32 +632,46 @@ async function processUpdate(update: TelegramUpdate) {
             const isVatTuChinh = nodeNameLower.includes("vật tư chính") && msgText.toLowerCase().includes("vật tư chính");
             const isVatTuPhu = nodeNameLower.includes("vật tư phụ") && msgText.toLowerCase().includes("vật tư phụ");
             if (isVatTuChinh || isVatTuPhu) {
-              matchedTarget = ft.target;
-              matchedNodeName = ft.nodeName;
-              break;
+              matchedTargets.push({ target: ft.target, nodeName: ft.nodeName });
             }
           }
-        }
-
-        if (matchedTarget) {
-          forwardChatId = matchedTarget.chatId;
-          forwardThreadId = matchedTarget.threadId;
-          addLog("info", `Routing forward to: ${matchedNodeName} (matched keywords)`, update.update_id);
         }
       }
 
       await runStep(nodeNames.approve, () => editCallbackButtons(update), "Ẩn nút đồng ý/không đồng ý.");
-      await runStep(nodeNames.forward, () =>
-        telegramRequest(runtime.token, "forwardMessage", {
-          chat_id: forwardChatId,
-          message_thread_id: forwardThreadId === null ? undefined : forwardThreadId,
-          from_chat_id: parsed.sourceChatId,
-          message_id: parsed.messageId,
-        }),
-      );
+
+      if (matchedTargets.length > 0) {
+        // Forward to all matched targets (N x N routing)
+        for (let i = 0; i < matchedTargets.length; i++) {
+          const { target, nodeName } = matchedTargets[i];
+          addLog("info", `Routing forward to: ${nodeName} (matched keywords)`, update.update_id);
+          const stepName = `${nodeNames.forward} (${nodeName})`;
+          await runStep(stepName, () =>
+            telegramRequest(runtime.token, "forwardMessage", {
+              chat_id: target.chatId,
+              message_thread_id: target.threadId === null ? undefined : target.threadId,
+              from_chat_id: parsed.sourceChatId,
+              message_id: parsed.messageId,
+            }),
+          );
+        }
+      } else {
+        // Default forward
+        let forwardChatId = runtime.forwardTarget?.chatId ?? forwardDestinationChatId;
+        let forwardThreadId = runtime.forwardTarget ? runtime.forwardTarget.threadId : null;
+        await runStep(nodeNames.forward, () =>
+          telegramRequest(runtime.token, "forwardMessage", {
+            chat_id: forwardChatId,
+            message_thread_id: forwardThreadId === null ? undefined : forwardThreadId,
+            from_chat_id: parsed.sourceChatId,
+            message_id: parsed.messageId,
+          }),
+        );
+      }
+
       runtime.handledCount += 1;
-      finishExecution("success", "Đã duyệt và forward tin nhắn.");
-      addLog("info", "Approved and forwarded message.", update.update_id);
+      finishExecution("success", `Đã duyệt và forward tin nhắn (matched ${matchedTargets.length} targets).`);
+      addLog("info", `Approved and forwarded message to ${matchedTargets.length || 1} destination(s).`, update.update_id);
       return;
     }
 

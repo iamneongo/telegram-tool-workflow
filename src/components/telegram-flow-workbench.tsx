@@ -1,13 +1,18 @@
 "use client";
 
 import {
+  AdjustmentsHorizontalIcon,
   ArrowPathRoundedSquareIcon,
   ArrowRightIcon,
   BoltIcon,
   ChatBubbleBottomCenterTextIcon,
   CheckCircleIcon,
+  Cog6ToothIcon,
   PaperAirplaneIcon,
+  PlayIcon,
   QuestionMarkCircleIcon,
+  SquaresPlusIcon,
+  StopIcon,
   XMarkIcon,
   XCircleIcon,
 } from "@heroicons/react/24/outline";
@@ -593,11 +598,7 @@ const NODE_PALETTE: Array<{
     detail: "custom node",
     subtitle: "forwardMessage",
     parameters: {
-      target: null,
-      destinationChatId: "",
-      sourceChatId: "",
-      messageId: "",
-      keywords: "",
+      mappings: [],
     },
   },
 ];
@@ -1183,6 +1184,11 @@ function normalizeSubtitle(snapshot: TelegramWorkflowSnapshot | null, config: N8
     return `${formatNumber(getAllowedTopics(config.parameters).length)} selected`;
   }
 
+  if (config.name.startsWith("Chuyển tiếp Vật tư")) {
+    const mappings = (config.parameters.mappings as any[]) || [];
+    return `${formatNumber(mappings.length)} luồng phân loại`;
+  }
+
   if (isForwardOrRejectNode(config.name) || config.name.startsWith("Gửi tin nhắn xác nhận")) {
     const target = getTopicSelection(config.parameters);
     return target ? formatTopicSelectionLabel(target) : "select target";
@@ -1740,48 +1746,96 @@ export default function TelegramFlowWorkbench() {
     [nodeConfigs, selectedConfig, snapshot, syncNodes],
   );
 
-  const setKeywordsForSelectedNode = useCallback(
-    (keywords: string) => {
-      if (!selectedConfig || !selectedConfig.name.startsWith("Chuyển tiếp Vật tư")) {
-        return;
-      }
+  const updateNodeMappings = useCallback((mappings: any[]) => {
+    if (!selectedConfig) return;
+    setNodeConfigs((current) => {
+      const next = current.map((node) => {
+        if (node.id !== selectedConfig.id) {
+          return node;
+        }
 
-      setNodeConfigs((current) => {
-        const next = current.map((node) => {
-          if (node.id !== selectedConfig.id) {
-            return node;
-          }
-
-          const nextParams: JsonRecord = {
-            ...node.parameters,
-            keywords,
-          };
-
-          return {
-            ...node,
-            parameters: nextParams,
-          };
-        });
-        syncNodes(next, snapshot);
-        return next;
-      });
-
-      setParameterDrafts((current) => {
-        const node = nodeConfigs.find((n) => n.id === selectedConfig.id);
-        const currentParams = node ? node.parameters : {};
         const nextParams: JsonRecord = {
-          ...currentParams,
-          keywords,
+          ...node.parameters,
+          mappings,
         };
 
         return {
-          ...current,
-          [selectedConfig.id]: stringifyJson(nextParams),
+          ...node,
+          parameters: nextParams,
         };
       });
-    },
-    [nodeConfigs, selectedConfig, snapshot, syncNodes],
-  );
+      syncNodes(next, snapshot);
+      return next;
+    });
+
+    setParameterDrafts((current) => {
+      const node = nodeConfigs.find((n) => n.id === selectedConfig.id);
+      const currentParams = node ? node.parameters : {};
+      const nextParams: JsonRecord = {
+        ...currentParams,
+        mappings,
+      };
+
+      return {
+        ...current,
+        [selectedConfig.id]: stringifyJson(nextParams),
+      };
+    });
+  }, [selectedConfig, nodeConfigs, snapshot, syncNodes]);
+
+  const handleAddMappingRow = useCallback(() => {
+    if (!selectedConfig) return;
+    const currentMappings = (selectedConfig.parameters.mappings as any[]) || [];
+    const nextMappings = [
+      ...currentMappings,
+      {
+        id: `row-${Date.now()}-${currentMappings.length}`,
+        keywords: "",
+        target: null,
+      },
+    ];
+
+    updateNodeMappings(nextMappings);
+  }, [selectedConfig, updateNodeMappings]);
+
+  const handleRemoveMappingRow = useCallback((rowIdOrIndex: string | number) => {
+    if (!selectedConfig) return;
+    const currentMappings = (selectedConfig.parameters.mappings as any[]) || [];
+    const nextMappings = currentMappings.filter((row, idx) => {
+      const id = row.id || idx;
+      return id !== rowIdOrIndex;
+    });
+
+    updateNodeMappings(nextMappings);
+  }, [selectedConfig, updateNodeMappings]);
+
+  const handleUpdateRowKeywords = useCallback((rowIdOrIndex: string | number, keywords: string) => {
+    if (!selectedConfig) return;
+    const currentMappings = (selectedConfig.parameters.mappings as any[]) || [];
+    const nextMappings = currentMappings.map((row, idx) => {
+      const id = row.id || idx;
+      if (id === rowIdOrIndex) {
+        return { ...row, keywords };
+      }
+      return row;
+    });
+
+    updateNodeMappings(nextMappings);
+  }, [selectedConfig, updateNodeMappings]);
+
+  const handleUpdateRowTarget = useCallback((rowIdOrIndex: string | number, target: AllowedTopicSelection | null) => {
+    if (!selectedConfig) return;
+    const currentMappings = (selectedConfig.parameters.mappings as any[]) || [];
+    const nextMappings = currentMappings.map((row, idx) => {
+      const id = row.id || idx;
+      if (id === rowIdOrIndex) {
+        return { ...row, target };
+      }
+      return row;
+    });
+
+    updateNodeMappings(nextMappings);
+  }, [selectedConfig, updateNodeMappings]);
 
   const applyRuntimeStatus = useCallback((nextStatus: RuntimeStatus) => {
     setRuntimeStatus(nextStatus);
@@ -1808,13 +1862,25 @@ export default function TelegramFlowWorkbench() {
     const forwardTargets: Array<{ nodeName: string; target: AllowedTopicSelection; keywords?: string }> = [];
     for (const config of nodeConfigs) {
       if (isForwardOrRejectNode(config.name)) {
-        const target = getTopicSelection(config.parameters);
-        if (target && target.chatId) {
-          forwardTargets.push({
-            nodeName: config.name,
-            target,
-            keywords: typeof config.parameters.keywords === "string" ? config.parameters.keywords : undefined,
-          });
+        if (config.parameters.mappings && Array.isArray(config.parameters.mappings)) {
+          for (const mapping of config.parameters.mappings) {
+            if (mapping.target && mapping.target.chatId) {
+              forwardTargets.push({
+                nodeName: `${config.name} (${mapping.keywords || "không từ khóa"})`,
+                target: mapping.target,
+                keywords: typeof mapping.keywords === "string" ? mapping.keywords : undefined,
+              });
+            }
+          }
+        } else {
+          const target = getTopicSelection(config.parameters);
+          if (target && target.chatId) {
+            forwardTargets.push({
+              nodeName: config.name,
+              target,
+              keywords: typeof config.parameters.keywords === "string" ? config.parameters.keywords : undefined,
+            });
+          }
         }
       }
     }
@@ -2160,60 +2226,72 @@ export default function TelegramFlowWorkbench() {
 
       <div className="pointer-events-none absolute left-6 top-6 z-20 flex max-w-[calc(100vw-3rem)] flex-wrap items-center gap-2">
         <div className="pointer-events-auto rounded-[8px] border border-white/10 bg-[#151516]/92 px-4 py-3 shadow-[0_20px_70px_rgba(0,0,0,0.35)] backdrop-blur-xl">
-          <div className="flex items-center gap-4">
-            <div className="min-w-[210px]">
+          <div className="flex items-center justify-between gap-6">
+            <div className="min-w-[180px] max-w-[220px]">
               <div className="text-[10px] uppercase tracking-[0.28em] text-white/35">Workflow</div>
               <div className="truncate text-sm font-medium text-white/85">{WORKFLOW_TEMPLATE.name}</div>
             </div>
-            <button
-              type="button"
-              onClick={() => void (workflowActive ? stopWorkflow() : startWorkflow())}
-              disabled={runtimeBusy}
-              className={[
-                "h-9 rounded-[6px] border px-3.5 text-[12px] font-medium transition disabled:cursor-not-allowed disabled:opacity-60",
-                workflowActive
-                  ? "border-rose-400/30 bg-rose-400/12 text-rose-100 hover:bg-rose-400/18"
-                  : "border-emerald-400/30 bg-emerald-400/15 text-emerald-100 hover:bg-emerald-400/20",
-              ].join(" ")}
-            >
-              {runtimeBusy ? "..." : workflowActive ? "Stop" : "Start"}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setSettingsOpen((value) => !value);
-                setPaletteOpen(false);
-              }}
-              className={[
-                "h-9 rounded-[6px] border px-3.5 text-[12px] font-medium transition",
-                settingsOpen ? "border-sky-400/30 bg-sky-400/15 text-sky-100" : "border-white/10 bg-white/5 text-white/75",
-              ].join(" ")}
-            >
-              Settings
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setPaletteOpen((value) => !value);
-                setSettingsOpen(false);
-              }}
-              className={[
-                "h-9 rounded-[6px] border px-3.5 text-[12px] font-medium transition",
-                paletteOpen ? "border-emerald-400/30 bg-emerald-400/15 text-emerald-100" : "border-white/10 bg-white/5 text-white/75",
-              ].join(" ")}
-            >
-              Nodes
-            </button>
-            <button
-              type="button"
-              onClick={() => setConfigOpen((value) => !value)}
-              className={[
-                "h-9 rounded-[6px] border px-3.5 text-[12px] font-medium transition",
-                configOpen ? "border-amber-400/30 bg-amber-400/15 text-amber-100" : "border-white/10 bg-white/5 text-white/75",
-              ].join(" ")}
-            >
-              Config
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void (workflowActive ? stopWorkflow() : startWorkflow())}
+                disabled={runtimeBusy}
+                title={workflowActive ? "Stop Workflow" : "Start Workflow"}
+                className={[
+                  "flex h-9 w-9 items-center justify-center rounded-[6px] border transition disabled:cursor-not-allowed disabled:opacity-60",
+                  workflowActive
+                    ? "border-rose-400/30 bg-rose-400/12 text-rose-300 hover:bg-rose-400/20"
+                    : "border-emerald-400/30 bg-emerald-400/15 text-emerald-300 hover:bg-emerald-400/20",
+                ].join(" ")}
+              >
+                {runtimeBusy ? (
+                  <span className="text-[10px] font-medium text-white/50">...</span>
+                ) : workflowActive ? (
+                  <StopIcon className="h-5 w-5" />
+                ) : (
+                  <PlayIcon className="h-5 w-5" />
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setSettingsOpen((value) => !value);
+                  setPaletteOpen(false);
+                }}
+                title="Settings"
+                className={[
+                  "flex h-9 w-9 items-center justify-center rounded-[6px] border transition",
+                  settingsOpen ? "border-sky-400/30 bg-sky-400/15 text-sky-300" : "border-white/10 bg-white/5 text-white/70 hover:bg-white/10 hover:text-white",
+                ].join(" ")}
+              >
+                <Cog6ToothIcon className="h-5 w-5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setPaletteOpen((value) => !value);
+                  setSettingsOpen(false);
+                }}
+                title="Nodes Palette"
+                className={[
+                  "flex h-9 w-9 items-center justify-center rounded-[6px] border transition",
+                  paletteOpen ? "border-emerald-400/30 bg-emerald-400/15 text-emerald-300" : "border-white/10 bg-white/5 text-white/70 hover:bg-white/10 hover:text-white",
+                ].join(" ")}
+              >
+                <SquaresPlusIcon className="h-5 w-5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfigOpen((value) => !value)}
+                title="Node Settings"
+                className={[
+                  "flex h-9 w-9 items-center justify-center rounded-[6px] border transition",
+                  configOpen ? "border-amber-400/30 bg-amber-400/15 text-amber-300" : "border-white/10 bg-white/5 text-white/70 hover:bg-white/10 hover:text-white",
+                ].join(" ")}
+              >
+                <AdjustmentsHorizontalIcon className="h-5 w-5" />
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -2408,6 +2486,62 @@ export default function TelegramFlowWorkbench() {
                     onSelectAll={() => setAllowedTopicsForSelectedNode(availableTopics)}
                     onClear={() => setAllowedTopicsForSelectedNode([])}
                   />
+                ) : selectedConfig.name.startsWith("Chuyển tiếp Vật tư") ? (
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <div className="text-[11px] font-semibold tracking-wider uppercase text-white/45">Danh sách phân luồng (Mappings)</div>
+                      <button
+                        type="button"
+                        onClick={handleAddMappingRow}
+                        className="rounded-[6px] border border-sky-400/20 bg-sky-400/10 px-2.5 py-1 text-[11px] font-medium text-sky-300 transition hover:bg-sky-400/20"
+                      >
+                        + Thêm dòng
+                      </button>
+                    </div>
+
+                    <div className="space-y-3">
+                      {((selectedConfig.parameters.mappings as any[]) || []).length === 0 ? (
+                        <div className="rounded-[6px] border border-dashed border-white/10 p-4 text-center text-[12px] text-white/35">
+                          Chưa có luồng phân loại nào. Hãy bấm "+ Thêm dòng" để thiết lập.
+                        </div>
+                      ) : (
+                        ((selectedConfig.parameters.mappings as any[]) || []).map((row, idx) => (
+                          <div key={row.id || idx} className="space-y-2 rounded-[6px] border border-white/10 bg-white/[0.02] p-3 relative">
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveMappingRow(row.id || idx)}
+                              className="absolute top-2 right-2 text-white/35 hover:text-rose-400"
+                              title="Xóa dòng"
+                            >
+                              <XMarkIcon aria-hidden="true" className="h-4 w-4" />
+                            </button>
+
+                            <div className="space-y-1 pr-6">
+                              <label className="text-[10px] font-medium tracking-wide uppercase text-white/35">Từ khóa (Keywords)</label>
+                              <input
+                                type="text"
+                                placeholder="Ví dụ: cát, đá, gạch"
+                                value={String(row.keywords || "")}
+                                onChange={(e) => handleUpdateRowKeywords(row.id || idx, e.target.value)}
+                                className="mt-1 w-full rounded-[4px] border border-white/12 bg-black/25 px-2.5 py-1 text-[12px] text-white outline-none focus:border-sky-400/40"
+                              />
+                            </div>
+
+                            <div className="space-y-1">
+                              <label className="text-[10px] font-medium tracking-wide uppercase text-white/35">Nhóm/Topic chuyển tiếp</label>
+                              <TopicTargetPicker
+                                topics={availableTopics}
+                                value={row.target || null}
+                                hasSnapshot={Boolean(snapshot)}
+                                onChange={(target) => handleUpdateRowTarget(row.id || idx, target)}
+                                onClear={() => handleUpdateRowTarget(row.id || idx, null)}
+                              />
+                            </div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
                 ) : isTargetConfigurableNode(selectedConfig.name) ? (
                   <div className="space-y-4">
                     <TopicTargetPicker
@@ -2417,22 +2551,6 @@ export default function TelegramFlowWorkbench() {
                       onChange={setTargetForSelectedNode}
                       onClear={() => setTargetForSelectedNode(null)}
                     />
-
-                    {selectedConfig.name.startsWith("Chuyển tiếp Vật tư") ? (
-                      <div className="space-y-1.5 rounded-[6px] border border-white/10 bg-white/[0.02] p-3">
-                        <label className="text-[11px] font-medium tracking-wide uppercase text-white/45">Từ khóa tìm kiếm (Keywords)</label>
-                        <input
-                          type="text"
-                          placeholder="Ví dụ: vật tư chính, cát, đá, xi măng"
-                          value={String(selectedConfig.parameters.keywords || "")}
-                          onChange={(e) => setKeywordsForSelectedNode(e.target.value)}
-                          className="mt-1 w-full rounded-[4px] border border-white/12 bg-black/25 px-2.5 py-1.5 text-[12px] text-white outline-none focus:border-sky-400/40"
-                        />
-                        <p className="mt-1 text-[10px] leading-relaxed text-white/35">
-                          Nhập các từ khóa cách nhau bởi dấu phẩy. Nếu tin nhắn được phê duyệt chứa bất kỳ từ khóa nào ở đây, nó sẽ được chuyển tiếp đến Topic này.
-                        </p>
-                      </div>
-                    ) : null}
                   </div>
                 ) : (
                   <div className="rounded-[6px] border border-white/10 bg-white/[0.03] px-3 py-3 text-[12px] leading-5 text-white/68">

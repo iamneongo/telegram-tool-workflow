@@ -3,15 +3,17 @@
 import {
   AdjustmentsHorizontalIcon,
   ArrowPathRoundedSquareIcon,
+  ArrowPathIcon,
   ArrowRightIcon,
   ArrowUturnRightIcon,
+  ArrowsPointingInIcon,
+  ArrowsPointingOutIcon,
   BoltIcon,
   BriefcaseIcon,
   ChatBubbleBottomCenterTextIcon,
   CheckCircleIcon,
   ChevronDownIcon,
   ChevronRightIcon,
-  Cog6ToothIcon,
   PaperAirplaneIcon,
   PencilSquareIcon,
   PlayIcon,
@@ -47,6 +49,18 @@ type NodeAccent = "cyan" | "emerald" | "amber" | "rose";
 type NodeKind = "trigger" | "condition" | "action";
 type JsonRecord = Record<string, unknown>;
 
+type MessageTemplateConfig = {
+  nodeName: string;
+  template: string;
+};
+
+type ConfigPanelTab = "target" | "template" | "mappings";
+
+type ConfigPanelTabSpec = {
+  id: ConfigPanelTab;
+  label: string;
+};
+
 type AllowedTopicSelection = {
   chatId: number;
   threadId: number | null;
@@ -62,6 +76,7 @@ type N8nCredentialRef = {
 type N8nNodeConfig = {
   id: string;
   name: string;
+  displayName?: string;
   n8nType: string;
   typeVersion: number;
   position: [number, number];
@@ -162,6 +177,162 @@ type RuntimeStatus = {
 };
 
 const DEFAULT_ALLOWED_TOPICS: AllowedTopicSelection[] = [];
+
+const MESSAGE_TEMPLATE_HELP_TEXT =
+  "Chỉ sửa phần chữ được cho phép. Biến và cú pháp đã được khóa để tránh lỗi workflow.";
+
+function isMessageTemplateNode(nodeName: string) {
+  return (
+    nodeName === "Tin nhắn Telegram" ||
+    nodeName.startsWith("Gửi tin nhắn xác nhận") ||
+    nodeName.startsWith("Từ chối tin nhắn") ||
+    nodeName.startsWith("Có vật tư") ||
+    nodeName.startsWith("Không có vật tư") ||
+    nodeName.startsWith("Có vật tư thay thế") ||
+    nodeName.startsWith("Xác nhận nhà cung ứng") ||
+    nodeName.startsWith("Nghiệm thu vật tư")
+  );
+}
+
+function isSafeMessageTemplateEditableNode(nodeName: string) {
+  return nodeName.startsWith("Từ chối tin nhắn") || nodeName.startsWith("Nghiệm thu vật tư");
+}
+
+function escapeHtmlLiteral(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function decodeHtmlLiteral(value: string) {
+  return value
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&");
+}
+
+function sanitizePlainText(value: string) {
+  return value.replace(/\{\{/g, "{").replace(/\}\}/g, "}");
+}
+
+function defaultMessageTemplateForNode(nodeName: string) {
+  if (nodeName.startsWith("Gửi tin nhắn xác nhận")) {
+    return "{{originalText}}";
+  }
+  if (nodeName.startsWith("Từ chối tin nhắn")) {
+    return "Đã bị từ chối: {{originalText}}";
+  }
+  if (nodeName.startsWith("Có vật tư thay thế")) {
+    return "🔄 <b>Thông tin vật tư thay thế từ {{userName}}</b>{{requestContext}}\n\n\"{{replyText}}\"";
+  }
+  if (nodeName.startsWith("Có vật tư")) {
+    return "{{originalText}}\n\n{{statusHtml}}";
+  }
+  if (nodeName.startsWith("Không có vật tư")) {
+    return "{{originalText}}\n\n{{statusHtml}}";
+  }
+  if (nodeName.startsWith("Xác nhận nhà cung ứng")) {
+    return "📦 {{statusHtml}}\n\nVui lòng reply tin nhắn này để xác nhận nhà cung ứng đã đến.";
+  }
+  if (nodeName.startsWith("Nghiệm thu vật tư")) {
+    return "📋 <b>{{userName}}</b> nghiệm thu vật tư sau xác nhận nhà cung ứng.\n\n{{replyText}}";
+  }
+  return "{{originalText}}";
+}
+
+function getMessageTemplateValue(config: N8nNodeConfig) {
+  const value = typeof config.parameters.messageTemplate === "string" ? config.parameters.messageTemplate.trim() : "";
+  return value || defaultMessageTemplateForNode(config.name);
+}
+
+function getSafeMessageTemplateText(nodeName: string, template: string) {
+  if (nodeName.startsWith("Từ chối tin nhắn")) {
+    const suffix = "{{originalText}}";
+    if (template.endsWith(suffix)) {
+      return decodeHtmlLiteral(template.slice(0, template.length - suffix.length));
+    }
+
+    return "Đã bị từ chối: ";
+  }
+
+  if (nodeName.startsWith("Nghiệm thu vật tư")) {
+    const prefix = "📋 <b>{{userName}}</b>";
+    const suffix = "{{replyText}}";
+    if (template.startsWith(prefix) && template.endsWith(suffix)) {
+      return decodeHtmlLiteral(template.slice(prefix.length, template.length - suffix.length));
+    }
+
+    return " nghiệm thu vật tư sau xác nhận nhà cung ứng.\n\n";
+  }
+
+  return "";
+}
+
+function buildSafeMessageTemplate(nodeName: string, text: string) {
+  const safeText = escapeHtmlLiteral(sanitizePlainText(text));
+
+  if (nodeName.startsWith("Từ chối tin nhắn")) {
+    return `${safeText}{{originalText}}`;
+  }
+
+  if (nodeName.startsWith("Nghiệm thu vật tư")) {
+    return `📋 <b>{{userName}}</b>${safeText}{{replyText}}`;
+  }
+
+  return defaultMessageTemplateForNode(nodeName);
+}
+
+function getConfigPanelTabs(config: N8nNodeConfig | undefined): ConfigPanelTabSpec[] {
+  if (!config) {
+    return [];
+  }
+
+  if (config.name === "Allowed Group Topic") {
+    return [{ id: "target", label: "Group/Topic" }];
+  }
+
+  if (config.name.startsWith("Chuyển tiếp Vật tư")) {
+    return [{ id: "mappings", label: "Mapping" }];
+  }
+
+  const tabs: ConfigPanelTabSpec[] = [];
+
+  if (isTargetConfigurableNode(config.name)) {
+    tabs.push({ id: "target", label: "Đích" });
+  }
+
+  if (isSafeMessageTemplateEditableNode(config.name)) {
+    tabs.push({ id: "template", label: "Mẫu tin nhắn" });
+  }
+
+  return tabs;
+}
+
+function HoverTip({ text }: { text: string }) {
+  return (
+    <span className="relative inline-flex group">
+      <button
+        type="button"
+        aria-label="Hướng dẫn"
+        className="inline-flex h-4 w-4 items-center justify-center rounded-full text-white/32 transition hover:text-white/70"
+      >
+        <QuestionMarkCircleIcon aria-hidden="true" className="h-4 w-4" />
+      </button>
+      <span className="pointer-events-none absolute left-1/2 top-full z-50 mt-2 hidden w-64 -translate-x-1/2 rounded-[6px] border border-white/10 bg-[#101113] px-3 py-2 text-[11px] leading-5 text-white/72 shadow-[0_16px_40px_rgba(0,0,0,0.45)] group-hover:block">
+        {text}
+      </span>
+    </span>
+  );
+}
+
+function getDefaultConfigPanelTab(config: N8nNodeConfig | undefined): ConfigPanelTab {
+  return getConfigPanelTabs(config)[0]?.id ?? "target";
+}
 
 const WORKFLOW_TEMPLATE: N8nWorkflowTemplate = {
   id: "8a2b7f18-76cf-4d64-8e6e-0f9a5e78d1f1",
@@ -757,6 +928,11 @@ function getNodeDisplayName(name: string) {
   return NODE_DISPLAY_NAMES[name] ?? name;
 }
 
+function getNodeLabel(config: Pick<N8nNodeConfig, "name" | "displayName">) {
+  const customLabel = typeof config.displayName === "string" ? config.displayName.trim() : "";
+  return customLabel || getNodeDisplayName(config.name);
+}
+
 function getNodeSetupSummary(name: string) {
   switch (name) {
     case "Telegram Trigger":
@@ -967,7 +1143,7 @@ function createNodes(configs: N8nNodeConfig[]): WorkflowNode[] {
     type: "workflowNode",
     position: toCanvasPosition(config.position),
     data: {
-      title: getNodeDisplayName(config.name),
+      title: getNodeLabel(config),
       subtitle: config.subtitle,
       sourceName: config.name,
       detail: config.detail,
@@ -1301,6 +1477,24 @@ function formatTopicSelectionLabel(target: AllowedTopicSelection | null) {
   return target.threadId === null ? target.chatTitle : `${target.chatTitle} / Topic #${target.threadId}`;
 }
 
+function formatMappingKeywords(keywords: unknown) {
+  const value = typeof keywords === "string" ? keywords.trim() : "";
+  if (!value) {
+    return "Chưa có từ khóa";
+  }
+
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .slice(0, 4)
+    .join(", ");
+}
+
+function getMappingRowKey(row: any, index: number) {
+  return row?.id ?? index;
+}
+
 function formatTopicDisplayName(_topicName: string, threadId: number | null) {
   if (threadId === null) {
     return "All messages";
@@ -1396,12 +1590,16 @@ function normalizeSubtitle(snapshot: TelegramWorkflowSnapshot | null, config: N8
 
   if (config.name.startsWith("Chuyển tiếp Vật tư")) {
     const mappings = (config.parameters.mappings as any[]) || [];
-    return `${formatNumber(mappings.length)} luồng phân loại`;
+    return `${formatNumber(mappings.length)} mapping`;
   }
 
   if (isForwardOrRejectNode(config.name) || config.name.startsWith("Gửi tin nhắn xác nhận") || isSupplierConfirmationNode(config.name) || isInspectionMaterialNode(config.name)) {
     const target = getTopicSelection(config.parameters);
     return target ? formatTopicSelectionLabel(target) : "select target";
+  }
+
+  if (isMessageTemplateNode(config.name)) {
+    return "Mẫu tin nhắn";
   }
 
   if (!snapshot) {
@@ -1452,6 +1650,7 @@ function createDroppedNodeConfig(templateId: string, index: number): N8nNodeConf
   return {
     id,
     name: `${template.label} ${index}`,
+    displayName: "",
     n8nType: template.n8nType,
     typeVersion: template.typeVersion,
     position: [0, 0],
@@ -1477,12 +1676,20 @@ export default function TelegramFlowWorkbench() {
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null);
   const [runtimeBusy, setRuntimeBusy] = useState(false);
   const [probeBusy, setProbeBusy] = useState(false);
+  const [refreshBusy, setRefreshBusy] = useState(false);
+  const [refreshConfirmOpen, setRefreshConfirmOpen] = useState(false);
+  const [refreshConfirmDraft, setRefreshConfirmDraft] = useState("");
   const [isFetching, setIsFetching] = useState(false);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [snapshot, setSnapshot] = useState<TelegramWorkflowSnapshot | null>(null);
   const [status, setStatus] = useState<StatusState>({ kind: "idle", text: "Ready" });
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [configOpen, setConfigOpen] = useState(false);
+  const [configPanelTab, setConfigPanelTab] = useState<ConfigPanelTab>("target");
+  const [configPanelExpanded, setConfigPanelExpanded] = useState(false);
+  const [isRenamingNode, setIsRenamingNode] = useState(false);
+  const [renameDraft, setRenameDraft] = useState("");
+  const [selectedMappingRowId, setSelectedMappingRowId] = useState<string | number | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(true);
   const [nodeConfigs, setNodeConfigs] = useState<N8nNodeConfig[]>(cloneTemplateNodes);
   const [, setParameterDrafts] = useState<Record<string, string>>(() =>
@@ -1566,7 +1773,7 @@ export default function TelegramFlowWorkbench() {
     () => edges.find((edge) => edge.id === selectedEdgeId) ?? null,
     [edges, selectedEdgeId],
   );
-  const nodeNameById = useMemo(() => new Map(nodeConfigs.map((node) => [node.id, node.name])), [nodeConfigs]);
+  const nodeNameById = useMemo(() => new Map(nodeConfigs.map((node) => [node.id, getNodeLabel(node)])), [nodeConfigs]);
   const selectedEdgeLabel = selectedEdge
     ? `${nodeNameById.get(selectedEdge.source) ?? "Node"} → ${nodeNameById.get(selectedEdge.target) ?? "Node"}`
     : null;
@@ -1574,6 +1781,383 @@ export default function TelegramFlowWorkbench() {
     () => (selectedConfig?.name === "Allowed Group Topic" ? getAllowedTopics(selectedConfig.parameters) : []),
     [selectedConfig],
   );
+  useEffect(() => {
+    setIsRenamingNode(false);
+    setRenameDraft(selectedConfig ? getNodeLabel(selectedConfig) : "");
+  }, [selectedConfig?.id]);
+
+  useEffect(() => {
+    setSelectedMappingRowId(null);
+  }, [selectedConfig?.id]);
+
+  const configPanelTabs = useMemo(() => getConfigPanelTabs(selectedConfig), [selectedConfig]);
+  const activeConfigPanelTab =
+    configPanelTabs.find((tab) => tab.id === configPanelTab)?.id ?? configPanelTabs[0]?.id ?? "target";
+  const configPanelWrapperClass = configPanelExpanded
+    ? "fixed inset-4 z-40"
+    : "pointer-events-none absolute right-6 bottom-6 z-20 w-[380px] max-w-[calc(100vw-3rem)]";
+  const configPanelCardClass = configPanelExpanded
+    ? "pointer-events-auto flex h-full w-full flex-col rounded-[12px] border border-white/10 bg-[#151516]/96 p-4 shadow-[0_28px_90px_rgba(0,0,0,0.52)] backdrop-blur-xl"
+    : "pointer-events-auto flex max-h-[calc(100vh-6rem)] w-full flex-col rounded-[8px] border border-white/10 bg-[#151516]/94 p-4 shadow-[0_24px_80px_rgba(0,0,0,0.42)] backdrop-blur-xl";
+
+  function renderConfigPanelContent(tab: ConfigPanelTab) {
+    if (!selectedConfig) {
+      return null;
+    }
+
+    if (selectedConfig.name === "Allowed Group Topic") {
+      return tab === "target" ? (
+        <AllowedTopicPicker
+          topics={availableTopics}
+          selectedTopics={selectedAllowedTopics}
+          selectedCount={selectedAllowedTopics.length}
+          hasSnapshot={Boolean(snapshot)}
+          onChange={setAllowedTopicsForSelectedNode}
+          onSelectAll={() => setAllowedTopicsForSelectedNode(availableTopics)}
+          onClear={() => setAllowedTopicsForSelectedNode([])}
+        />
+      ) : (
+        <div className="rounded-[8px] border border-white/10 bg-white/5 p-3 text-[12px] leading-5 text-white/72">
+          Không có cấu hình riêng cho tab này.
+        </div>
+      );
+    }
+
+    if (selectedConfig.name.startsWith("Chuyển tiếp Vật tư")) {
+      return tab === "mappings" ? (
+        (() => {
+          const mappings = ((selectedConfig.parameters.mappings as any[]) || []).filter(Boolean);
+          const configuredCount = mappings.filter((row) => Boolean(row.target?.chatId)).length;
+          const selectedRow =
+            mappings.find((row, idx) => getMappingRowKey(row, idx) === selectedMappingRowId) ??
+            mappings[0] ??
+            null;
+          const selectedRowIndex = selectedRow ? mappings.indexOf(selectedRow) : -1;
+          const selectedRowKey = selectedRow ? getMappingRowKey(selectedRow, selectedRowIndex >= 0 ? selectedRowIndex : 0) : null;
+          const selectedKeywords = selectedRow ? String(selectedRow.keywords || "") : "";
+          const selectedTarget = selectedRow ? (selectedRow.target || null) : null;
+
+          return (
+            <div className="space-y-3">
+              <div className="rounded-[8px] border border-white/10 bg-white/5 p-3">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-[10px] uppercase tracking-[0.22em] text-white/35">Mapping tin nhắn và nhà cung cấp</div>
+                    <div className="mt-1 text-[12px] text-white/70">
+                      {formatNumber(mappings.length)} mapping, {formatNumber(configuredCount)} đã gán nhà cung cấp.
+                    </div>
+                    <div className="mt-1 text-[11px] leading-5 text-white/35">
+                      Chọn một dòng bên dưới để sửa từ khóa và đích tương ứng.
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleAddMappingRow}
+                    className="inline-flex h-9 items-center rounded-[6px] border border-sky-400/20 bg-sky-400/10 px-3 text-[11px] font-medium text-sky-300 transition hover:bg-sky-400/20"
+                  >
+                    + Thêm mapping
+                  </button>
+                </div>
+              </div>
+
+              {mappings.length === 0 ? (
+                <div className="rounded-[8px] border border-dashed border-white/10 bg-white/5 px-4 py-5 text-center">
+                  <div className="text-[12px] font-medium text-white/72">Chưa có mapping nào</div>
+                  <div className="mt-1 text-[11px] leading-5 text-white/35">
+                    Tạo mapping đầu tiên để ghép tin nhắn với nhà cung cấp tương ứng.
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleAddMappingRow}
+                    className="mt-3 inline-flex h-9 items-center rounded-[6px] border border-white/10 bg-white/5 px-3 text-[11px] font-medium text-white/75 transition hover:bg-white/10"
+                  >
+                    Tạo mapping đầu tiên
+                  </button>
+                </div>
+              ) : (
+                <>
+                  <div className="space-y-2 lg:hidden">
+                    {mappings.map((row, idx) => {
+                      const rowKey = getMappingRowKey(row, idx);
+                      const isSelected = rowKey === selectedRowKey;
+                      const keywords = formatMappingKeywords(row.keywords);
+                      const target = row.target || null;
+                      const targetLabel = formatTopicSelectionLabel(target);
+                      const isConfigured = Boolean(target?.chatId);
+
+                      return (
+                        <button
+                          key={rowKey}
+                          type="button"
+                          onClick={() => setSelectedMappingRowId(rowKey)}
+                          className={[
+                            "w-full rounded-[8px] border px-3 py-3 text-left transition",
+                            isSelected ? "border-sky-400/25 bg-sky-400/8" : "border-white/10 bg-[#101113] hover:bg-white/5",
+                          ].join(" ")}
+                        >
+                          <div className="flex items-start gap-3">
+                            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/5 text-[11px] font-semibold text-white/72">
+                              {idx + 1}
+                            </span>
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2">
+                                <span className="truncate text-[12px] font-medium text-white">
+                                  {keywords === "Chưa có từ khóa" ? "Chưa đặt từ khóa" : keywords}
+                                </span>
+                                <span
+                                  className={[
+                                    "shrink-0 rounded-[999px] border px-1.5 py-0.5 text-[9px] font-semibold leading-none tracking-wide",
+                                    isConfigured
+                                      ? "border-emerald-400/20 bg-emerald-400/10 text-emerald-300"
+                                      : "border-amber-400/20 bg-amber-400/10 text-amber-200",
+                                  ].join(" ")}
+                                >
+                                  {isConfigured ? "Gán" : "Trống"}
+                                </span>
+                              </div>
+                              <div className="mt-1 text-[11px] leading-5 text-white/42">
+                                <span className="text-white/55">Nhà cung cấp:</span> <span className="text-white/75">{targetLabel}</span>
+                              </div>
+                              <div className="mt-2 flex flex-wrap items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    handleDuplicateMappingRow(rowKey);
+                                  }}
+                                  className="rounded-[6px] border border-white/10 bg-white/5 px-2.5 py-1 text-[10px] font-medium text-white/70 transition hover:bg-white/10"
+                                  title="Nhân bản mapping"
+                                >
+                                  Clone
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    handleRemoveMappingRow(rowKey);
+                                  }}
+                                  className="rounded-[6px] border border-white/10 bg-white/5 p-2 text-white/35 transition hover:bg-rose-400/10 hover:text-rose-300"
+                                  title="Xóa mapping"
+                                >
+                                  <XMarkIcon aria-hidden="true" className="h-4 w-4" />
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <div className="hidden overflow-hidden rounded-[8px] border border-white/10 bg-[#101113] lg:block">
+                    <div className="grid grid-cols-[44px_1.2fr_1fr_124px] items-center gap-3 border-b border-white/10 bg-white/5 px-3 py-2 text-[10px] uppercase tracking-[0.22em] text-white/35">
+                      <span>#</span>
+                      <span>Từ khóa tin nhắn</span>
+                      <span>Nhà cung cấp</span>
+                      <span className="text-right">Thao tác</span>
+                    </div>
+
+                    <div className="divide-y divide-white/10">
+                      {mappings.map((row, idx) => {
+                        const rowKey = getMappingRowKey(row, idx);
+                        const isSelected = rowKey === selectedRowKey;
+                        const keywords = formatMappingKeywords(row.keywords);
+                        const target = row.target || null;
+                        const targetLabel = formatTopicSelectionLabel(target);
+                        const isConfigured = Boolean(target?.chatId);
+
+                        return (
+                          <button
+                            key={rowKey}
+                            type="button"
+                            onClick={() => setSelectedMappingRowId(rowKey)}
+                            className={[
+                              "grid w-full grid-cols-[44px_1.2fr_1fr_124px] items-center gap-3 px-3 py-3 text-left transition",
+                              isSelected ? "bg-sky-400/8" : "hover:bg-white/5",
+                            ].join(" ")}
+                          >
+                            <span className="flex h-7 w-7 items-center justify-center rounded-full border border-white/10 bg-white/5 text-[11px] font-semibold text-white/72">
+                              {idx + 1}
+                            </span>
+                            <span className="min-w-0 truncate text-[12px] text-white/80">
+                              {keywords === "Chưa có từ khóa" ? "Chưa đặt từ khóa" : keywords}
+                            </span>
+                            <span className="min-w-0 truncate text-[12px] text-white/70">{targetLabel}</span>
+                            <span className="flex items-center justify-end gap-2">
+                              <span
+                                className={[
+                                  "rounded-[999px] border px-1.5 py-0.5 text-[9px] font-semibold leading-none tracking-wide",
+                                  isConfigured
+                                    ? "border-emerald-400/20 bg-emerald-400/10 text-emerald-300"
+                                    : "border-amber-400/20 bg-amber-400/10 text-amber-200",
+                                ].join(" ")}
+                              >
+                                {isConfigured ? "Gán" : "Trống"}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  handleDuplicateMappingRow(rowKey);
+                                }}
+                                className="rounded-[6px] border border-white/10 bg-white/5 px-2.5 py-1 text-[10px] font-medium text-white/70 transition hover:bg-white/10"
+                                title="Nhân bản mapping"
+                              >
+                                Clone
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  handleRemoveMappingRow(rowKey);
+                                }}
+                                className="rounded-[6px] border border-white/10 bg-white/5 p-2 text-white/35 transition hover:bg-rose-400/10 hover:text-rose-300"
+                                title="Xóa mapping"
+                              >
+                                <XMarkIcon aria-hidden="true" className="h-4 w-4" />
+                              </button>
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {selectedRow ? (
+                    <div className="space-y-3 rounded-[8px] border border-white/10 bg-white/5 p-3">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <div className="text-[10px] uppercase tracking-[0.22em] text-white/35">Đang sửa mapping</div>
+                          <div className="mt-1 text-[12px] text-white/70">
+                            Mapping #{selectedRowIndex + 1} - {selectedKeywords.trim() || "chưa có từ khóa"}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleUpdateRowTarget(selectedRowKey ?? 0, null)}
+                          className="h-8 rounded-[6px] border border-white/10 bg-white/5 px-2.5 text-[11px] text-white/70 transition hover:bg-white/10"
+                        >
+                          Xóa nhà cung cấp
+                        </button>
+                      </div>
+
+                      <div className={["grid gap-3 grid-cols-1", configPanelExpanded ? "xl:grid-cols-[1fr_1fr]" : ""].join(" ")}>
+                        <div className="rounded-[8px] border border-white/10 bg-[#0d1118] p-3">
+                          <div className="text-[10px] uppercase tracking-[0.22em] text-white/35">Từ khóa tin nhắn</div>
+                          <div className="mt-1 text-[11px] leading-5 text-white/42">
+                            Nhập từ khóa để nhận diện tin nhắn. Ngăn cách nhiều từ bằng dấu phẩy.
+                          </div>
+                          <input
+                            type="text"
+                            value={selectedKeywords}
+                            onChange={(e) => handleUpdateRowKeywords(selectedRowKey ?? 0, e.target.value)}
+                            placeholder="cát, đá, gạch"
+                            className="mt-3 h-10 w-full rounded-[6px] border border-white/10 bg-[#101113] px-3 text-[12px] text-white outline-none placeholder:text-white/28 focus:border-sky-400/40"
+                          />
+                          <div className="mt-3 flex flex-wrap gap-1.5">
+                            {selectedKeywords
+                              .split(",")
+                              .map((item) => item.trim())
+                              .filter(Boolean)
+                              .slice(0, 6)
+                              .map((item) => (
+                                <span
+                                  key={item}
+                                  className="rounded-full border border-white/10 bg-white/5 px-2 py-1 text-[10px] text-white/70"
+                                >
+                                  {item}
+                                </span>
+                              ))}
+                          </div>
+                        </div>
+
+                        <div className="rounded-[8px] border border-white/10 bg-[#0d1118] p-3">
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <div className="text-[10px] uppercase tracking-[0.22em] text-white/35">Nhà cung cấp tương ứng</div>
+                              <div className="mt-1 text-[11px] leading-5 text-white/42">
+                                Chọn group chat hoặc topic đích để map với tin nhắn này.
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleUpdateRowTarget(selectedRowKey ?? 0, null)}
+                              className="h-8 rounded-[6px] border border-white/10 bg-white/5 px-2.5 text-[11px] text-white/70 transition hover:bg-white/10"
+                            >
+                              Bỏ chọn
+                            </button>
+                          </div>
+
+                          <div className="mt-3">
+                            <TopicTargetPicker
+                              topics={availableTopics}
+                              value={selectedTarget}
+                              hasSnapshot={Boolean(snapshot)}
+                              onChange={(topic) => handleUpdateRowTarget(selectedRowKey ?? 0, topic)}
+                              onClear={() => handleUpdateRowTarget(selectedRowKey ?? 0, null)}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+                </>
+              )}
+            </div>
+          );
+        })()
+      ) : (
+        <div className="rounded-[8px] border border-white/10 bg-white/5 p-3 text-[12px] leading-5 text-white/72">
+          Không có cấu hình riêng cho tab này.
+        </div>
+      );
+    }
+
+    if (tab === "target") {
+      if (!isTargetConfigurableNode(selectedConfig.name)) {
+        return (
+          <div className="rounded-[8px] border border-white/10 bg-white/5 p-3 text-[12px] leading-5 text-white/72">
+            Không có cấu hình riêng cho tab này.
+          </div>
+        );
+      }
+
+      return (
+        <TopicTargetPicker
+          topics={availableTopics}
+          value={getTopicSelection(selectedConfig.parameters)}
+          hasSnapshot={Boolean(snapshot)}
+          onChange={setTargetForSelectedNode}
+          onClear={() => setTargetForSelectedNode(null)}
+        />
+      );
+    }
+
+    if (tab === "template") {
+      if (!isSafeMessageTemplateEditableNode(selectedConfig.name)) {
+        return (
+          <div className="rounded-[8px] border border-white/10 bg-white/5 p-3 text-[12px] leading-5 text-white/72">
+            Không có cấu hình riêng cho tab này.
+          </div>
+        );
+      }
+
+      return (
+        <SafeMessageTemplateEditor
+          nodeName={selectedConfig.name}
+          value={getMessageTemplateValue(selectedConfig)}
+          onChange={(template) => setMessageTemplateForSelectedNode(template)}
+        />
+      );
+    }
+
+    return (
+      <div className="rounded-[8px] border border-white/10 bg-white/5 p-3 text-[12px] leading-5 text-white/72">
+        Không có cấu hình riêng cho node này.
+      </div>
+    );
+  }
+
   const availableTopics = useMemo(() => {
     const available = [...getAvailableTopicsFromInventory(runtimeStatus?.inventory), ...getAvailableTopics(snapshot)];
     const seen = new Set<string>();
@@ -1669,6 +2253,8 @@ export default function TelegramFlowWorkbench() {
         autoPoll,
         settingsOpen,
         configOpen,
+        configPanelTab,
+        configPanelExpanded,
         paletteOpen,
         selectedNodeId,
         selectedEdgeId,
@@ -1682,6 +2268,8 @@ export default function TelegramFlowWorkbench() {
     [
       autoPoll,
       configOpen,
+      configPanelExpanded,
+      configPanelTab,
       deepScan,
       edges,
       nodeConfigs,
@@ -1761,6 +2349,8 @@ export default function TelegramFlowWorkbench() {
         setAutoPoll(state.ui.autoPoll);
         setSettingsOpen(state.ui.settingsOpen);
         setConfigOpen(state.ui.configOpen);
+        setConfigPanelTab((state.ui.configPanelTab as ConfigPanelTab | undefined) ?? getDefaultConfigPanelTab(undefined));
+        setConfigPanelExpanded(Boolean(state.ui.configPanelExpanded));
         setPaletteOpen(state.ui.paletteOpen);
         setSelectedNodeId(state.ui.selectedNodeId);
         setSelectedEdgeId(state.ui.selectedEdgeId);
@@ -1794,6 +2384,15 @@ export default function TelegramFlowWorkbench() {
     };
   }, [ensureBuiltinNodes, setEdges, setNodes]);
 
+  useEffect(() => {
+    const tabs = getConfigPanelTabs(selectedConfig);
+    if (tabs.length === 0 || tabs.some((tab) => tab.id === configPanelTab)) {
+      return;
+    }
+
+    setConfigPanelTab(tabs[0]?.id ?? "target");
+  }, [configPanelTab, selectedConfig]);
+
   const syncNodes = useCallback(
     (configs: N8nNodeConfig[], nextSnapshot: TelegramWorkflowSnapshot | null) => {
       const configById = new Map(configs.map((config) => [config.id, config]));
@@ -1805,7 +2404,7 @@ export default function TelegramFlowWorkbench() {
             ...node,
             data: {
               ...node.data,
-              title: getNodeDisplayName(config.name),
+              title: getNodeLabel(config),
               subtitle: normalizeSubtitle(nextSnapshot, config),
               sourceName: config.name,
               detail: config.detail,
@@ -1831,7 +2430,7 @@ export default function TelegramFlowWorkbench() {
         type: "workflowNode",
         position: point,
         data: {
-          title: getNodeDisplayName(nextConfig.name),
+          title: getNodeLabel(nextConfig),
           subtitle: nextConfig.subtitle,
           detail: nextConfig.detail,
           sourceName: nextConfig.name,
@@ -2044,6 +2643,80 @@ export default function TelegramFlowWorkbench() {
     [nodeConfigs, selectedConfig, snapshot, syncNodes],
   );
 
+  const setMessageTemplateForSelectedNode = useCallback(
+    (template: string) => {
+      if (!selectedConfig || !isMessageTemplateNode(selectedConfig.name)) {
+        return;
+      }
+
+      setNodeConfigs((current) => {
+        const next = current.map((node) => {
+          if (node.id !== selectedConfig.id) {
+            return node;
+          }
+
+          return {
+            ...node,
+            parameters: {
+              ...node.parameters,
+              messageTemplate: template,
+            },
+          };
+        });
+        syncNodes(next, snapshot);
+        return next;
+      });
+    },
+    [selectedConfig, snapshot, syncNodes],
+  );
+
+  const setDisplayNameForSelectedNode = useCallback(
+    (displayName: string) => {
+      if (!selectedConfig) {
+        return;
+      }
+
+      setNodeConfigs((current) => {
+        const next = current.map((node) => {
+          if (node.id !== selectedConfig.id) {
+            return node;
+          }
+
+          return {
+            ...node,
+            displayName: displayName.trim(),
+          };
+        });
+        syncNodes(next, snapshot);
+        return next;
+      });
+    },
+    [selectedConfig, snapshot, syncNodes],
+  );
+
+  const beginNodeRename = useCallback(() => {
+    if (!selectedConfig) {
+      return;
+    }
+
+    setRenameDraft(getNodeLabel(selectedConfig));
+    setIsRenamingNode(true);
+  }, [selectedConfig]);
+
+  const commitNodeRename = useCallback(() => {
+    if (!selectedConfig) {
+      return;
+    }
+
+    setDisplayNameForSelectedNode(renameDraft);
+    setIsRenamingNode(false);
+  }, [renameDraft, selectedConfig, setDisplayNameForSelectedNode]);
+
+  const cancelNodeRename = useCallback(() => {
+    setRenameDraft(selectedConfig ? getNodeLabel(selectedConfig) : "");
+    setIsRenamingNode(false);
+  }, [selectedConfig]);
+
   const updateNodeMappings = useCallback((mappings: any[]) => {
     if (!selectedConfig) return;
     setNodeConfigs((current) => {
@@ -2081,31 +2754,59 @@ export default function TelegramFlowWorkbench() {
     });
   }, [selectedConfig, nodeConfigs, snapshot, syncNodes]);
 
+  const handleDuplicateMappingRow = useCallback(
+    (rowIdOrIndex: string | number) => {
+      if (!selectedConfig) return;
+      const currentMappings = (selectedConfig.parameters.mappings as any[]) || [];
+      const sourceRow = currentMappings.find((row, idx) => (row.id || idx) === rowIdOrIndex);
+      if (!sourceRow) return;
+
+      const nextMappings = [
+        ...currentMappings,
+        {
+          ...sourceRow,
+          id: `row-${Date.now()}-${currentMappings.length}`,
+        },
+      ];
+
+      updateNodeMappings(nextMappings);
+      setSelectedMappingRowId(nextMappings[nextMappings.length - 1].id);
+    },
+    [selectedConfig, updateNodeMappings],
+  );
+
   const handleAddMappingRow = useCallback(() => {
     if (!selectedConfig) return;
     const currentMappings = (selectedConfig.parameters.mappings as any[]) || [];
+    const nextId = `row-${Date.now()}-${currentMappings.length}`;
     const nextMappings = [
       ...currentMappings,
       {
-        id: `row-${Date.now()}-${currentMappings.length}`,
+        id: nextId,
         keywords: "",
         target: null,
       },
     ];
 
     updateNodeMappings(nextMappings);
+    setSelectedMappingRowId(nextId);
   }, [selectedConfig, updateNodeMappings]);
 
   const handleRemoveMappingRow = useCallback((rowIdOrIndex: string | number) => {
     if (!selectedConfig) return;
     const currentMappings = (selectedConfig.parameters.mappings as any[]) || [];
+    const removedIndex = currentMappings.findIndex((row, idx) => (row.id || idx) === rowIdOrIndex);
     const nextMappings = currentMappings.filter((row, idx) => {
       const id = row.id || idx;
       return id !== rowIdOrIndex;
     });
 
     updateNodeMappings(nextMappings);
-  }, [selectedConfig, updateNodeMappings]);
+    if (selectedMappingRowId === rowIdOrIndex) {
+      const replacement = nextMappings[removedIndex] ?? nextMappings[removedIndex - 1] ?? nextMappings[0] ?? null;
+      setSelectedMappingRowId(replacement ? replacement.id || 0 : null);
+    }
+  }, [selectedConfig, selectedMappingRowId, updateNodeMappings]);
 
   const handleUpdateRowKeywords = useCallback((rowIdOrIndex: string | number, keywords: string) => {
     if (!selectedConfig) return;
@@ -2158,6 +2859,7 @@ export default function TelegramFlowWorkbench() {
 
     // Collect all forward targets from configs
     const forwardTargets: Array<{ nodeName: string; target: AllowedTopicSelection; keywords?: string }> = [];
+    const messageTemplates: MessageTemplateConfig[] = [];
     for (const config of nodeConfigs) {
       if (isForwardOrRejectNode(config.name) || isSupplierConfirmationNode(config.name) || isInspectionMaterialNode(config.name) || config.name.startsWith("Gửi tin nhắn xác nhận")) {
         if (config.parameters.mappings && Array.isArray(config.parameters.mappings)) {
@@ -2181,6 +2883,13 @@ export default function TelegramFlowWorkbench() {
           }
         }
       }
+
+      if (isMessageTemplateNode(config.name)) {
+        messageTemplates.push({
+          nodeName: config.name,
+          template: getMessageTemplateValue(config),
+        });
+      }
     }
 
     try {
@@ -2196,6 +2905,7 @@ export default function TelegramFlowWorkbench() {
           forwardTarget: getTargetFromConfig(nodeConfigs, "Forward Tin nhắn") ||
                          getTargetFromConfigPrefix(nodeConfigs, "Chuyển tiếp"),
           forwardTargets,
+          messageTemplates,
         }),
       });
       const payload = (await response.json()) as { ok: boolean; status?: RuntimeStatus; error?: string };
@@ -2332,14 +3042,13 @@ export default function TelegramFlowWorkbench() {
       }
 
       const nextSnapshot = payload as TelegramWorkflowSnapshot;
-      const mergedSnapshot = mergeWorkflowSnapshots(snapshotRef.current, nextSnapshot);
-      snapshotRef.current = mergedSnapshot;
-      setSnapshot(mergedSnapshot);
+      snapshotRef.current = nextSnapshot;
+      setSnapshot(nextSnapshot);
       setStatus({
         kind: "success",
-        text: `Đã scan ${formatNumber(mergedSnapshot.groups.length)} group / ${formatNumber(mergedSnapshot.topics.length)} topic`,
+        text: `Đã scan ${formatNumber(nextSnapshot.groups.length)} group / ${formatNumber(nextSnapshot.topics.length)} topic`,
       });
-      syncNodes(nodeConfigs, mergedSnapshot);
+      syncNodes(nodeConfigs, nextSnapshot);
       if (!options.silent) {
         showToast(nextSnapshot.warnings[0] ?? "Đã cập nhật group/topic");
       }
@@ -2357,6 +3066,81 @@ export default function TelegramFlowWorkbench() {
       abortRef.current = null;
     }
   }, [deepScan, nodeConfigs, showToast, syncNodes, token]);
+
+  const refreshInventory = useCallback(async () => {
+    if (refreshBusy) {
+      return;
+    }
+
+    const trimmedToken = token.trim();
+    setRefreshBusy(true);
+    setStatus({ kind: "loading", text: "Refreshing inventory" });
+
+    try {
+      const response = await fetch("/api/local-workflow", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "refreshInventory",
+          token: trimmedToken || undefined,
+        }),
+      });
+
+      const payload = (await response.json()) as { ok: boolean; status?: RuntimeStatus; error?: string };
+
+      if (!response.ok || !payload.ok) {
+        throw new Error(payload.error || "Không refresh được inventory.");
+      }
+
+      if (payload.status) {
+        applyRuntimeStatus(payload.status);
+      }
+
+      snapshotRef.current = null;
+      setSnapshot(null);
+      await fetchWorkflow({ silent: true });
+      showToast("Inventory cache cleared");
+      setStatus({ kind: "success", text: "Inventory đã được refresh" });
+    } catch (error) {
+      const message = getCleanErrorMessage(error, "Không refresh được inventory.");
+      setStatus({ kind: "error", text: message });
+      showToast(message);
+    } finally {
+      setRefreshBusy(false);
+    }
+  }, [applyRuntimeStatus, fetchWorkflow, refreshBusy, showToast, token]);
+
+  const openRefreshConfirm = useCallback(() => {
+    setRefreshConfirmDraft("");
+    setRefreshConfirmOpen(true);
+  }, []);
+
+  const closeRefreshConfirm = useCallback(() => {
+    if (refreshBusy) {
+      return;
+    }
+    setRefreshConfirmOpen(false);
+    setRefreshConfirmDraft("");
+  }, [refreshBusy]);
+
+  const confirmRefreshInventory = useCallback(async () => {
+    if (refreshBusy) {
+      return;
+    }
+
+    if (refreshConfirmDraft.trim().toUpperCase() !== "REFRESH") {
+      setStatus({ kind: "error", text: 'Gõ "REFRESH" để xác nhận.' });
+      return;
+    }
+
+    try {
+      await refreshInventory();
+      setRefreshConfirmOpen(false);
+      setRefreshConfirmDraft("");
+    } catch {
+      // refreshInventory already surfaces errors.
+    }
+  }, [refreshBusy, refreshConfirmDraft, refreshInventory]);
 
   const handleDeleteWebhook = useCallback(async () => {
     if (deleteBusy) {
@@ -2556,22 +3340,7 @@ export default function TelegramFlowWorkbench() {
               <button
                 type="button"
                 onClick={() => {
-                  setSettingsOpen((value) => !value);
-                  setPaletteOpen(false);
-                }}
-                title="Settings"
-                className={[
-                  "flex h-9 w-9 items-center justify-center rounded-[6px] border transition",
-                  settingsOpen ? "border-sky-400/30 bg-sky-400/15 text-sky-300" : "border-white/10 bg-white/5 text-white/35 hover:bg-white/10 hover:text-white",
-                ].join(" ")}
-              >
-                <Cog6ToothIcon className="h-5 w-5" />
-              </button>
-              <button
-                type="button"
-                onClick={() => {
                   setPaletteOpen((value) => !value);
-                  setSettingsOpen(false);
                 }}
                 title="Nodes Palette"
                 className={[
@@ -2580,6 +3349,24 @@ export default function TelegramFlowWorkbench() {
                 ].join(" ")}
               >
                 <SquaresPlusIcon className="h-5 w-5" />
+              </button>
+              <button
+                type="button"
+                onClick={openRefreshConfirm}
+                disabled={refreshBusy}
+                title="Refresh inventory"
+                className={[
+                  "flex h-9 w-9 items-center justify-center rounded-[6px] border transition disabled:cursor-not-allowed disabled:opacity-60",
+                  refreshBusy
+                    ? "border-sky-400/25 bg-sky-400/10 text-sky-200"
+                    : "border-white/10 bg-white/5 text-white/35 hover:bg-white/10 hover:text-white",
+                ].join(" ")}
+              >
+                {refreshBusy ? (
+                  <span className="text-[10px] font-medium text-white/55">...</span>
+                ) : (
+                  <ArrowPathIcon className="h-5 w-5" />
+                )}
               </button>
               <button
                 type="button"
@@ -2609,106 +3396,6 @@ export default function TelegramFlowWorkbench() {
             >
               Delete line
             </button>
-          </div>
-        </div>
-      ) : null}
-
-      {settingsOpen ? (
-        <div className="pointer-events-auto absolute left-6 top-[108px] z-30 w-[360px] rounded-[8px] border border-white/10 bg-[#151516]/94 p-4 shadow-[0_24px_80px_rgba(0,0,0,0.42)] backdrop-blur-xl">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <div className="text-[10px] uppercase tracking-[0.28em] text-white/35">Settings</div>
-              <div className="mt-1 text-sm font-medium text-white">Telegram scan</div>
-            </div>
-            <button
-              type="button"
-              onClick={() => setSettingsOpen(false)}
-              aria-label="Đóng"
-              title="Đóng"
-              className="flex h-8 w-8 items-center justify-center rounded-[6px] border border-white/10 bg-white/5 text-white/35 transition hover:bg-white/10 hover:text-white"
-            >
-              <XMarkIcon aria-hidden="true" className="h-4 w-4" />
-            </button>
-          </div>
-
-          <div className="mt-4 space-y-3">
-            <label className="block">
-              <span className="text-[10px] uppercase tracking-[0.22em] text-white/35">Token</span>
-              <input
-                value={token}
-                onChange={(event) => setToken(event.target.value)}
-                placeholder="env token"
-                className="mt-1 h-10 w-full rounded-[6px] border border-white/10 bg-white/5 px-3 text-[12px] text-white outline-none placeholder:text-white/35 focus:border-sky-400/40"
-              />
-            </label>
-
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => void fetchWorkflow()}
-                disabled={isFetching || workflowActive}
-                className="h-10 rounded-[6px] bg-sky-400 px-3 text-[12px] font-medium text-slate-950 transition hover:bg-sky-300 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {workflowActive ? "Running" : isFetching ? "Scanning" : "Scan now"}
-              </button>
-              <button
-                type="button"
-                onClick={() => void handleDeleteWebhook()}
-                disabled={deleteBusy}
-                className="h-10 rounded-[6px] border border-white/10 bg-white/5 px-3 text-[12px] font-medium text-white transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {deleteBusy ? "Working" : "Webhook off"}
-              </button>
-            </div>
-
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => void probeInventory()}
-                disabled={probeBusy || workflowActive}
-                className="h-10 rounded-[6px] border border-white/10 bg-white/5 px-3 text-[12px] font-medium text-white transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {probeBusy ? "Probing" : workflowActive ? "Stop to probe" : "Probe inventory"}
-              </button>
-              <div className="rounded-[6px] border border-white/10 bg-white/5 px-3 py-2 text-[11px] leading-5 text-white/35">
-                Gửi thử rồi xoá ngay để ghi nhớ group thực tế.
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-2">
-              <ToggleButton
-                active={autoPoll}
-                disabled={workflowActive}
-                label="Auto scan"
-                onClick={() => setAutoPoll((value) => !value)}
-              />
-              <ToggleButton active={deepScan} label="Deep scan" onClick={() => setDeepScan((value) => !value)} />
-            </div>
-
-            <div className="grid grid-cols-3 gap-2">
-              <MetaBox label="State" value={workflowStateLabel} valueClassName={workflowStateClass} />
-              <MetaBox label="Webhook" value={snapshot?.webhook.url ? "On" : "Off"} />
-              <MetaBox label="Inventory" value={`${formatNumber(inventoryGroupCount)} / ${formatNumber(inventoryTopicCount)}`} />
-            </div>
-            <div className="grid grid-cols-3 gap-2">
-              <MetaBox label="Handled" value={formatNumber(runtimeHandled)} />
-              <MetaBox label="Ignored" value={formatNumber(runtimeIgnored)} />
-              <MetaBox label="Last event" value={runtimeLastUpdate} />
-            </div>
-            {runtimeStatus?.lastError ? (
-              <div className="rounded-[6px] border border-rose-400/20 bg-rose-400/10 px-3 py-2 text-[12px] leading-5 text-rose-100">
-                {runtimeStatus.lastError}
-              </div>
-            ) : null}
-            {runtimeStatus?.logs.length ? (
-              <div className="max-h-36 overflow-auto rounded-[6px] border border-white/10 bg-white/5 p-2">
-                {runtimeStatus.logs.slice(0, 5).map((log) => (
-                  <div key={`${log.at}-${log.updateId ?? log.message}`} className="py-1 text-[11px] leading-4 text-white/64">
-                    <span className="text-white/35">{new Date(log.at).toLocaleTimeString()}</span> {log.message}
-                  </div>
-                ))}
-              </div>
-            ) : null}
           </div>
         </div>
       ) : null}
@@ -2768,110 +3455,94 @@ export default function TelegramFlowWorkbench() {
       ) : null}
 
       {configOpen ? (
-        <div className="pointer-events-none absolute right-6 bottom-6 z-20 w-[380px] max-w-[calc(100vw-3rem)]">
-          <div className="pointer-events-auto rounded-[8px] border border-white/10 bg-[#151516]/94 p-4 shadow-[0_24px_80px_rgba(0,0,0,0.42)] backdrop-blur-xl">
+        <div className={configPanelWrapperClass}>
+          <div className={configPanelCardClass}>
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
-                <div className="mt-2 truncate text-sm font-medium text-white">
-                  {selectedConfig ? getNodeDisplayName(selectedConfig.name) : "Node"}
+                <div className="text-[10px] uppercase tracking-[0.28em] text-white/35">Node</div>
+                {selectedConfig ? (
+                  isRenamingNode ? (
+                    <input
+                      autoFocus
+                      value={renameDraft}
+                      onChange={(event) => setRenameDraft(event.target.value)}
+                      onBlur={commitNodeRename}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          commitNodeRename();
+                        }
+                        if (event.key === "Escape") {
+                          event.preventDefault();
+                          cancelNodeRename();
+                        }
+                      }}
+                      className="mt-2 h-9 w-full rounded-[6px] border border-sky-400/30 bg-[#101011] px-3 text-[14px] font-medium text-white outline-none focus:border-sky-400/50"
+                    />
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={beginNodeRename}
+                      className="mt-2 block w-full truncate text-left text-sm font-medium text-white transition hover:text-sky-300"
+                      title="Bấm để đổi tên"
+                    >
+                      {getNodeLabel(selectedConfig)}
+                    </button>
+                  )
+                ) : (
+                  <div className="mt-2 truncate text-sm font-medium text-white">Node</div>
+                )}
+                <div className="mt-1 truncate text-[11px] leading-5 text-white/35">
+                  {selectedConfig ? normalizeSubtitle(snapshot, selectedConfig) : "Chọn node để cấu hình"}
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={() => setConfigOpen(false)}
-                aria-label="Đóng"
-                title="Đóng"
-                className="flex h-8 w-8 items-center justify-center rounded-[6px] border border-white/10 bg-white/5 text-white/35 transition hover:bg-white/10 hover:text-white"
-              >
-                <XMarkIcon aria-hidden="true" className="h-4 w-4" />
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setConfigPanelExpanded((value) => !value)}
+                  aria-label={configPanelExpanded ? "Thu nhỏ" : "Phóng to"}
+                  title={configPanelExpanded ? "Thu nhỏ" : "Phóng to"}
+                  className="flex h-8 w-8 items-center justify-center rounded-[6px] border border-white/10 bg-white/5 text-white/35 transition hover:bg-white/10 hover:text-white"
+                >
+                  {configPanelExpanded ? <ArrowsPointingInIcon aria-hidden="true" className="h-4 w-4" /> : <ArrowsPointingOutIcon aria-hidden="true" className="h-4 w-4" />}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfigOpen(false)}
+                  aria-label="Đóng"
+                  title="Đóng"
+                  className="flex h-8 w-8 items-center justify-center rounded-[6px] border border-white/10 bg-white/5 text-white/35 transition hover:bg-white/10 hover:text-white"
+                >
+                  <XMarkIcon aria-hidden="true" className="h-4 w-4" />
+                </button>
+              </div>
             </div>
 
-            {selectedConfig ? (
-              <div className="mt-4 space-y-3">
-                {selectedConfig.name === "Allowed Group Topic" ? (
-                  <AllowedTopicPicker
-                    topics={availableTopics}
-                    selectedTopics={selectedAllowedTopics}
-                    selectedCount={selectedAllowedTopics.length}
-                    hasSnapshot={Boolean(snapshot)}
-                    onChange={setAllowedTopicsForSelectedNode}
-                    onSelectAll={() => setAllowedTopicsForSelectedNode(availableTopics)}
-                    onClear={() => setAllowedTopicsForSelectedNode([])}
-                  />
-                ) : selectedConfig.name.startsWith("Chuyển tiếp Vật tư") ? (
-                  <div className="space-y-4">
-                    <div className="flex items-center justify-between">
-                      <div className="text-[11px] font-semibold tracking-wider uppercase text-white/35">Danh sách phân luồng (Mappings)</div>
-                      <button
-                        type="button"
-                        onClick={handleAddMappingRow}
-                        className="rounded-[6px] border border-sky-400/20 bg-sky-400/10 px-2.5 py-1 text-[11px] font-medium text-sky-300 transition hover:bg-sky-400/20"
-                      >
-                        + Thêm dòng
-                      </button>
-                    </div>
-
-                    <div className="space-y-3">
-                      {((selectedConfig.parameters.mappings as any[]) || []).length === 0 ? (
-                        <div className="rounded-[6px] border border-dashed border-white/10 p-4 text-center text-[12px] text-white/35">
-                          Chưa có luồng phân loại nào. Hãy bấm "+ Thêm dòng" để thiết lập.
-                        </div>
-                      ) : (
-                        ((selectedConfig.parameters.mappings as any[]) || []).map((row, idx) => (
-                          <div key={row.id || idx} className="relative space-y-2 rounded-[6px] border border-white/10 bg-white/5 p-3">
-                            <button
-                              type="button"
-                              onClick={() => handleRemoveMappingRow(row.id || idx)}
-                              className="absolute right-2 top-2 text-white/35 hover:text-rose-400"
-                              title="Xóa dòng"
-                            >
-                              <XMarkIcon aria-hidden="true" className="h-4 w-4" />
-                            </button>
-
-                            <div className="space-y-1 pr-6">
-                              <label className="text-[10px] font-medium tracking-wide uppercase text-white/35">Từ khóa (Keywords)</label>
-                              <input
-                                type="text"
-                                placeholder="Ví dụ: cát, đá, gạch"
-                                value={String(row.keywords || "")}
-                                onChange={(e) => handleUpdateRowKeywords(row.id || idx, e.target.value)}
-                                className="mt-1 w-full rounded-[4px] border border-white/10 bg-white/5 px-2.5 py-1 text-[12px] text-white outline-none focus:border-sky-400/40"
-                              />
-                            </div>
-
-                            <div className="space-y-1">
-                              <label className="text-[10px] font-medium tracking-wide uppercase text-white/35">Nhóm/Topic chuyển tiếp</label>
-                              <TopicTargetPicker
-                                topics={availableTopics}
-                                value={row.target || null}
-                                hasSnapshot={Boolean(snapshot)}
-                                onChange={(target) => handleUpdateRowTarget(row.id || idx, target)}
-                                onClear={() => handleUpdateRowTarget(row.id || idx, null)}
-                              />
-                            </div>
-                          </div>
-                        ))
-                      )}
-                    </div>
-                  </div>
-                ) : isTargetConfigurableNode(selectedConfig.name) ? (
-                  <div className="space-y-4">
-                    <TopicTargetPicker
-                      topics={availableTopics}
-                      value={getTopicSelection(selectedConfig.parameters)}
-                      hasSnapshot={Boolean(snapshot)}
-                      onChange={setTargetForSelectedNode}
-                      onClear={() => setTargetForSelectedNode(null)}
-                    />
-                  </div>
-                ) : (
-                  <div className="rounded-[6px] border border-white/10 bg-white/5 px-3 py-3 text-[12px] leading-5 text-white/35">
-                    Node này đã được cấu hình sẵn. Chỉ cần bấm Start là chạy.
-                  </div>
-                )}
+            {configPanelTabs.length ? (
+              <div className="mt-4 flex flex-wrap gap-1 rounded-[8px] border border-white/10 bg-white/5 p-1">
+                {configPanelTabs.map((tab) => {
+                  const active = tab.id === activeConfigPanelTab;
+                  return (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setConfigPanelTab(tab.id)}
+                      title={tab.id === "template" ? MESSAGE_TEMPLATE_HELP_TEXT : undefined}
+                      className={[
+                        "rounded-[6px] px-3 py-1.5 text-[11px] font-medium transition",
+                        active ? "bg-sky-400 text-slate-950" : "text-white/60 hover:bg-white/10 hover:text-white",
+                      ].join(" ")}
+                    >
+                      {tab.label}
+                    </button>
+                  );
+                })}
               </div>
             ) : null}
+
+            <div className="mt-4 min-h-0 flex-1 overflow-auto pr-1">
+              {selectedConfig ? renderConfigPanelContent(activeConfigPanelTab) : null}
+            </div>
           </div>
         </div>
       ) : null}
@@ -2879,6 +3550,75 @@ export default function TelegramFlowWorkbench() {
       {toast ? (
         <div className="pointer-events-none absolute bottom-6 left-1/2 z-30 -translate-x-1/2 rounded-[8px] border border-white/10 bg-[#151516]/94 px-4 py-2 text-[12px] text-white shadow-[0_20px_70px_rgba(0,0,0,0.35)]">
           {toast}
+        </div>
+      ) : null}
+
+      {refreshConfirmOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 px-4 py-6 backdrop-blur-sm">
+          <div className="w-full max-w-[420px] rounded-[12px] border border-white/10 bg-[#151516]/96 p-4 shadow-[0_30px_100px_rgba(0,0,0,0.55)]">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="text-[10px] uppercase tracking-[0.28em] text-white/35">Confirm refresh</div>
+                <div className="mt-1 text-sm font-medium text-white">Xóa cache inventory và quét lại</div>
+              </div>
+              <button
+                type="button"
+                onClick={closeRefreshConfirm}
+                disabled={refreshBusy}
+                className="flex h-8 w-8 items-center justify-center rounded-[6px] border border-white/10 bg-white/5 text-white/35 transition hover:bg-white/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+                aria-label="Đóng"
+                title="Đóng"
+              >
+                <XMarkIcon aria-hidden="true" className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="mt-3 rounded-[8px] border border-amber-400/20 bg-amber-400/10 px-3 py-2 text-[12px] leading-5 text-amber-50/90">
+              Thao tác này sẽ xóa cache group/topic hiện tại ngay lập tức, rồi quét lại Telegram để nạp dữ liệu mới.
+            </div>
+
+            <div className="mt-4">
+              <label className="block">
+                <div className="text-[10px] uppercase tracking-[0.22em] text-white/35">Nhập xác nhận</div>
+                <input
+                  autoFocus
+                  value={refreshConfirmDraft}
+                  onChange={(event) => setRefreshConfirmDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Escape") {
+                      event.preventDefault();
+                      closeRefreshConfirm();
+                    }
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      void confirmRefreshInventory();
+                    }
+                  }}
+                  placeholder='Gõ "REFRESH"'
+                  className="mt-2 h-10 w-full rounded-[6px] border border-white/10 bg-[#0d1118] px-3 text-[12px] text-white outline-none placeholder:text-white/28 focus:border-sky-400/40"
+                />
+              </label>
+            </div>
+
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={closeRefreshConfirm}
+                disabled={refreshBusy}
+                className="h-9 rounded-[6px] border border-white/10 bg-white/5 px-3 text-[12px] font-medium text-white/75 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Hủy
+              </button>
+              <button
+                type="button"
+                onClick={() => void confirmRefreshInventory()}
+                disabled={refreshBusy || refreshConfirmDraft.trim().toUpperCase() !== "REFRESH"}
+                className="h-9 rounded-[6px] border border-rose-400/20 bg-rose-400/12 px-3 text-[12px] font-medium text-rose-100 transition hover:bg-rose-400/18 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {refreshBusy ? "Đang refresh..." : "Xóa cache và refresh"}
+              </button>
+            </div>
+          </div>
         </div>
       ) : null}
     </main>
@@ -3213,6 +3953,93 @@ function TopicTargetPicker({
         })}
         </div>
       </div>
+    </div>
+  );
+}
+
+function SafeMessageTemplateEditor({
+  nodeName,
+  value,
+  onChange,
+}: {
+  nodeName: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const isRejectNode = nodeName.startsWith("Từ chối tin nhắn");
+  const isInspectionNode = nodeName.startsWith("Nghiệm thu vật tư");
+  const editableText = getSafeMessageTemplateText(nodeName, value);
+
+  const handleChange = useCallback(
+    (nextText: string) => {
+      onChange(buildSafeMessageTemplate(nodeName, nextText));
+    },
+    [nodeName, onChange],
+  );
+
+  if (!isRejectNode && !isInspectionNode) {
+    return (
+      <div className="rounded-[8px] border border-white/10 bg-white/5 p-3 text-[12px] leading-5 text-white/72">
+        Không hỗ trợ chỉnh trực tiếp phần mẫu này.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3 rounded-[6px] border border-white/10 bg-white/5 p-3">
+      <div>
+        <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.22em] text-white/35">
+          <span>Mẫu tin nhắn</span>
+          <HoverTip text={MESSAGE_TEMPLATE_HELP_TEXT} />
+        </div>
+        <div className="mt-1 text-[12px] text-white/52">Chỉ sửa phần chữ. Biến và cú pháp được khóa cứng.</div>
+      </div>
+
+      {isRejectNode ? (
+        <>
+          <div className="rounded-[6px] border border-white/10 bg-black/10 px-3 py-2 text-[11px] leading-5 text-white/45">
+            Phần khóa: <span className="font-mono text-white/75">{"{{originalText}}"}</span>
+          </div>
+          <label className="block">
+            <div className="text-[10px] uppercase tracking-[0.22em] text-white/35">Text được sửa</div>
+            <textarea
+              value={editableText}
+              onChange={(event) => handleChange(event.target.value)}
+              rows={2}
+              className="mt-2 w-full rounded-[6px] border border-white/10 bg-[#0d1118] px-3 py-2 text-[12px] leading-5 text-white outline-none placeholder:text-white/28 focus:border-sky-400/40"
+              placeholder="Đã bị từ chối: "
+            />
+          </label>
+          <div className="rounded-[6px] border border-white/10 bg-black/10 px-3 py-2 text-[11px] leading-5 text-white/45">
+            Kết quả: <span className="text-white/75">{editableText || "Đã bị từ chối: "}</span>
+            <span className="font-mono text-white/75">{"{{originalText}}"}</span>
+          </div>
+        </>
+      ) : null}
+
+      {isInspectionNode ? (
+        <>
+          <div className="rounded-[6px] border border-white/10 bg-black/10 px-3 py-2 text-[11px] leading-5 text-white/45">
+            Phần khóa: <span className="font-mono text-white/75">{"📋 <b>{{userName}}</b>"}</span> và{" "}
+            <span className="font-mono text-white/75">{"{{replyText}}"}</span>
+          </div>
+          <label className="block">
+            <div className="text-[10px] uppercase tracking-[0.22em] text-white/35">Text được sửa</div>
+            <textarea
+              value={editableText}
+              onChange={(event) => handleChange(event.target.value)}
+              rows={3}
+              className="mt-2 w-full rounded-[6px] border border-white/10 bg-[#0d1118] px-3 py-2 text-[12px] leading-5 text-white outline-none placeholder:text-white/28 focus:border-sky-400/40"
+              placeholder=" nghiệm thu vật tư sau xác nhận nhà cung ứng.\n\n"
+            />
+          </label>
+          <div className="rounded-[6px] border border-white/10 bg-black/10 px-3 py-2 text-[11px] leading-5 text-white/45">
+            Kết quả: <span className="font-mono text-white/75">{"📋 <b>{{userName}}</b>"}</span>
+            <span className="text-white/75">{editableText || " nghiệm thu vật tư sau xác nhận nhà cung ứng.\n\n"}</span>
+            <span className="font-mono text-white/75">{"{{replyText}}"}</span>
+          </div>
+        </>
+      ) : null}
     </div>
   );
 }

@@ -81,12 +81,18 @@ type LocalWorkflowRuntime = {
   approvalTarget?: AllowedTopicConfig;
   forwardTarget?: AllowedTopicConfig;
   forwardTargets?: TargetWithNodeName[];
+  messageTemplates?: MessageTemplateConfig[];
 };
 
 export type TargetWithNodeName = {
   nodeName: string;
   target: AllowedTopicConfig;
   keywords?: string;
+};
+
+export type MessageTemplateConfig = {
+  nodeName: string;
+  template: string;
 };
 
 export type LocalWorkflowStatus = Omit<LocalWorkflowRuntime, "timer" | "token"> & {
@@ -99,6 +105,7 @@ type StartOptions = {
   approvalTarget?: AllowedTopicConfig;
   forwardTarget?: AllowedTopicConfig;
   forwardTargets?: TargetWithNodeName[];
+  messageTemplates?: MessageTemplateConfig[];
 };
 
 const defaultAllowedTopics: AllowedTopicConfig[] = [];
@@ -148,6 +155,7 @@ function getRuntime(): LocalWorkflowRuntime {
       executionSeq: 0,
       currentExecution: null,
       lastExecution: null,
+      messageTemplates: [],
     };
   }
 
@@ -191,6 +199,11 @@ function writeInventory() {
   }
 
   mirrorWorkspaceInventory(runtime.inventory);
+}
+
+function resetInventory() {
+  runtime.inventory = emptyInventory();
+  writeInventory();
 }
 
 function uniqueProbeTargets() {
@@ -250,6 +263,59 @@ function topicDisplayName(message: TelegramMessage, threadId: number) {
 function isPlaceholderTopicName(topicName: string, threadId: number) {
   const trimmed = topicName.trim();
   return trimmed === "" || trimmed === `Topic ${threadId}` || trimmed === `Topic #${threadId}`;
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function renderMessageTemplate(template: string, variables: Record<string, string>, rawKeys: string[] = []) {
+  const rawSet = new Set(rawKeys);
+  return template.replace(/{{\s*([a-zA-Z0-9_.-]+)\s*}}/g, (_, key: string) => {
+    const value = variables[key] ?? "";
+    return rawSet.has(key) ? value : escapeHtml(value);
+  });
+}
+
+function normalizeMessageTemplates(templates: MessageTemplateConfig[] | undefined) {
+  const source = Array.isArray(templates) ? templates : [];
+  const seen = new Set<string>();
+  const normalized: MessageTemplateConfig[] = [];
+
+  for (const item of source) {
+    const nodeName = String(item?.nodeName || "").trim();
+    const template = String(item?.template || "").trim();
+    if (!nodeName || !template) {
+      continue;
+    }
+
+    const key = nodeName.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    normalized.push({ nodeName, template });
+  }
+
+  return normalized;
+}
+
+function getMessageTemplate(nodeName: string, fallback: string) {
+  const templates = runtime.messageTemplates ?? [];
+  const match = templates.find(
+    (item) =>
+      item.nodeName === nodeName ||
+      nodeName.startsWith(item.nodeName) ||
+      item.nodeName.startsWith(nodeName),
+  );
+
+  return match?.template?.trim() || fallback;
 }
 
 function upsertInventoryGroup(chatId: number, chatTitle: string, chatType: string) {
@@ -394,6 +460,12 @@ export async function probeWorkflowInventory(options: { token: string }) {
   };
 }
 
+export function refreshWorkflowInventory() {
+  resetInventory();
+  addLog("info", "Inventory cache cleared.");
+  return getLocalWorkflowStatus();
+}
+
 function recordUpdateInventory(update: TelegramUpdate) {
   recordMessageInventory(update.message);
   recordMessageInventory(update.edited_message);
@@ -406,18 +478,21 @@ function recordUpdateInventory(update: TelegramUpdate) {
 }
 
 export function recordWorkflowSnapshotInventory(snapshot: TelegramWorkflowSnapshot) {
-  for (const group of snapshot.groups) {
-    upsertInventoryGroup(group.chatId, group.chatTitle, group.chatType);
-  }
+  runtime.inventory.groups = snapshot.groups.map((group) => ({
+    chatId: group.chatId,
+    chatTitle: group.chatTitle,
+    chatType: group.chatType,
+  }));
 
-  for (const topic of snapshot.topics) {
-    upsertInventoryTopic(topic.chatId, topic.threadId, topic.chatTitle, topic.topicName);
-  }
+  runtime.inventory.topics = snapshot.topics.map((topic) => ({
+    chatId: topic.chatId,
+    threadId: topic.threadId,
+    chatTitle: topic.chatTitle,
+    topicName: topic.topicName,
+  }));
 
-  if (snapshot.groups.length > 0 || snapshot.topics.length > 0) {
-    runtime.inventory.updatedAt = new Date().toISOString();
-    writeInventory();
-  }
+  runtime.inventory.updatedAt = new Date().toISOString();
+  writeInventory();
 
   return runtime.inventory;
 }
@@ -564,21 +639,30 @@ async function sendApprovalRequest(update: TelegramUpdate) {
 
   const chatId = runtime.approvalTarget?.chatId ?? approvalChatId;
   const threadId = runtime.approvalTarget ? runtime.approvalTarget.threadId : approvalThreadId;
+  const text = renderMessageTemplate(
+    getMessageTemplate("Gửi tin nhắn xác nhận", "{{originalText}}"),
+    {
+      originalText: message.text || message.caption || "(no text)",
+      userName: message.from ? ([message.from.first_name, message.from.last_name].filter(Boolean).join(" ") || message.from.username || `User ${message.from.id}`) : "",
+      chatTitle: chatDisplayName(message),
+      topicName: message.message_thread_id ? topicDisplayName(message, message.message_thread_id) : "",
+    },
+  );
 
   await telegramRequest(runtime.token, "sendMessage", {
     chat_id: chatId,
     message_thread_id: threadId === null ? undefined : threadId,
-    text: message.text || message.caption || "(no text)",
+    text,
     reply_markup: JSON.stringify({
       inline_keyboard: [
         [
           {
             text: "Đồng ý",
-            callback_data: `approve|${message.chat.id}|${message.message_id}`,
+            callback_data: `approve|${message.chat.id}|${message.message_id}|${message.message_thread_id ?? "null"}`,
           },
           {
             text: "Không đồng ý",
-            callback_data: `reject|${message.chat.id}|${message.message_id}`,
+            callback_data: `reject|${message.chat.id}|${message.message_id}|${message.message_thread_id ?? "null"}`,
           },
         ],
       ],
@@ -658,42 +742,21 @@ async function processUpdate(update: TelegramUpdate) {
             sourceThreadId = meta.threadId;
           }
         }
-        
-        // 2. If not in map, check if the replied-to message is the request itself
         if (!requestText && promptText.includes("yêu cầu dùng vật tư thay thế")) {
           requestText = promptText;
         }
 
-        // Format the combined text
-        let combinedText = "";
-        if (requestText && requestText.includes("yêu cầu dùng vật tư thay thế")) {
-          // If the requestText contains the status sentence, let's append the replacement material details directly to it
-          // Remove trailing period if present
-          let baseText = requestText;
-          if (baseText.endsWith(".")) {
-            baseText = baseText.slice(0, -1);
-          }
-          
-          // Find the last line containing "yêu cầu dùng vật tư thay thế" and wrap it in bold
-          const lastIndex = baseText.lastIndexOf("yêu cầu dùng vật tư thay thế");
-          if (lastIndex !== -1) {
-            const startOfLine = baseText.lastIndexOf("\n", lastIndex);
-            const prefix = baseText.slice(0, startOfLine + 1);
-            const statusLine = baseText.slice(startOfLine + 1);
-            combinedText = `${prefix}<b>${statusLine}: "${replyText}"</b>`;
-          } else {
-            combinedText = `${baseText}: "${replyText}"`;
-          }
-        } else {
-          // Fallback if we don't have the full request text (only prompt text)
-          const lines = promptText.split("\n").map(l => l.trim()).filter(Boolean);
-          const contextLine = lines[0] || "";
-          if (contextLine && !promptText.startsWith("Vui lòng reply tin nhắn này")) {
-            combinedText = `🔄 <b>Thông tin vật tư thay thế từ ${userName}</b> (cho yêu cầu: <i>${contextLine}</i>):\n\n"${replyText}"`;
-          } else {
-            combinedText = `🔄 <b>Thông tin vật tư thay thế từ ${userName}:</b>\n\n"${replyText}"`;
-          }
-        }
+        const requestContext = requestText ? ` (cho yêu cầu: <i>${escapeHtml(requestText)}</i>)` : "";
+        const combinedText = renderMessageTemplate(
+          getMessageTemplate("Có vật tư thay thế", "🔄 <b>Thông tin vật tư thay thế từ {{userName}}</b>{{requestContext}}\n\n\"{{replyText}}\""),
+          {
+            userName,
+            replyText,
+            requestText,
+            requestContext,
+          },
+          ["requestContext"],
+        );
 
         addLog("info", `Routing replacement material reply to: Có vật tư thay thế group`, update.update_id);
         await runStep(`Gửi câu trả lời vật tư thay thế`, () =>
@@ -748,7 +811,13 @@ async function processUpdate(update: TelegramUpdate) {
 
       // Notify back to the original group
       if (sourceChatId) {
-        const notifyText = `📦 <b>${userName}</b> xác nhận: "${replyText}"`;
+        const notifyText = renderMessageTemplate(
+          `📦 <b>{{userName}}</b> xác nhận: "{{replyText}}"`,
+          {
+            userName,
+            replyText,
+          },
+        );
         addLog("info", `Routing supplier confirmation reply back to source group`, update.update_id);
         await runStep("Gửi xác nhận nhà cung ứng về group gốc", () =>
           telegramRequest(runtime.token, "sendMessage", {
@@ -761,25 +830,40 @@ async function processUpdate(update: TelegramUpdate) {
         );
       }
 
-      let inspectionTarget: AllowedTopicConfig | undefined;
-      if (runtime.forwardTargets) {
-        const matchedNode = runtime.forwardTargets.find((ft) => ft.nodeName.startsWith("Nghiệm thu vật tư"));
-        if (matchedNode) {
-          inspectionTarget = matchedNode.target;
-        }
-      }
+      const inspectionText = renderMessageTemplate(
+        getMessageTemplate("Nghiệm thu vật tư", "📋 <b>{{userName}}</b> nghiệm thu vật tư sau xác nhận nhà cung ứng.\n\n{{replyText}}"),
+        {
+          userName,
+          replyText,
+        },
+      );
 
-      if (inspectionTarget) {
-        const inspectionText = `📋 <b>${userName}</b> nghiệm thu vật tư sau xác nhận nhà cung ứng.\n\n${replyText}`;
-        addLog("info", `Routing supplier confirmation reply to inspection target`, update.update_id);
+      const inspectionChatId = sourceChatId ?? null;
+      const inspectionThreadId = sourceThreadId ?? null;
+      if (inspectionChatId) {
+        addLog("info", `Routing supplier confirmation reply to original source topic`, update.update_id);
         await runStep("Gửi nghiệm thu vật tư", () =>
           telegramRequest(runtime.token, "sendMessage", {
-            chat_id: inspectionTarget!.chatId,
-            message_thread_id: inspectionTarget!.threadId === null ? undefined : inspectionTarget!.threadId,
+            chat_id: inspectionChatId,
+            message_thread_id: inspectionThreadId === null ? undefined : inspectionThreadId,
             text: inspectionText,
             parse_mode: "HTML",
+            reply_to_message_id: sourceMessageId || undefined,
           })
         );
+      } else if (runtime.forwardTargets) {
+        const matchedNode = runtime.forwardTargets.find((ft) => ft.nodeName.startsWith("Nghiệm thu vật tư"));
+        if (matchedNode) {
+          addLog("info", `Routing supplier confirmation reply to fallback inspection target`, update.update_id);
+          await runStep("Gửi nghiệm thu vật tư", () =>
+            telegramRequest(runtime.token, "sendMessage", {
+              chat_id: matchedNode.target.chatId,
+              message_thread_id: matchedNode.target.threadId === null ? undefined : matchedNode.target.threadId,
+              text: inspectionText,
+              parse_mode: "HTML",
+            })
+          );
+        }
       }
 
       runtime.handledCount += 1;
@@ -852,11 +936,25 @@ async function processUpdate(update: TelegramUpdate) {
         // For "vt_thay" (Có vật tư thay thế), we hold off sending the notification until they reply with the details.
         if (customTarget && parsed.action !== "vt_thay") {
           addLog("info", `Routing material response notification to: ${targetNodePrefix} group`, update.update_id);
+          const statusHtml =
+            parsed.action === "vt_co"
+              ? `✅ <b>${escapeHtml(userName)}</b> đồng ý cung cấp vật tư.`
+              : `❌ <b>${escapeHtml(userName)}</b> báo không có vật tư.`;
+          const messageTemplateNode = parsed.action === "vt_co" ? "Có vật tư" : "Không có vật tư";
           await runStep(`Gửi thông báo (${targetNodePrefix})`, () =>
             telegramRequest(runtime.token, "sendMessage", {
               chat_id: customTarget!.chatId,
               message_thread_id: customTarget!.threadId === null ? undefined : customTarget!.threadId,
-              text: newText,
+              text: renderMessageTemplate(
+                getMessageTemplate(messageTemplateNode, "{{originalText}}\n\n{{statusHtml}}"),
+                {
+                  originalText,
+                  statusHtml,
+                  statusLine: statusHtml,
+                  userName,
+                },
+                ["statusHtml", "statusLine"],
+              ),
               parse_mode: "HTML",
             })
           );
@@ -868,7 +966,7 @@ async function processUpdate(update: TelegramUpdate) {
             telegramRequest<TelegramMessage>(runtime.token, "sendMessage", {
               chat_id: chatId,
               message_thread_id: cbQuery.message?.message_thread_id,
-              text: `Vui lòng reply tin nhắn này với tên vật tư thay thế cho tin nhắn trên:`,
+              text: "Vui lòng reply tin nhắn này với tên vật tư thay thế cho tin nhắn trên:",
               reply_markup: JSON.stringify({
                 force_reply: true,
                 selective: true,
@@ -897,11 +995,28 @@ async function processUpdate(update: TelegramUpdate) {
 
           if (supplierTarget) {
             addLog("info", `Sending supplier confirmation prompt to: Xác nhận nhà cung ứng group`, update.update_id);
+            const statusHtml = `✅ <b>${escapeHtml(userName)}</b> đồng ý cung cấp vật tư.`;
+            const supplierTemplate = getMessageTemplate(
+              "Xác nhận nhà cung ứng",
+              "📦 {{statusHtml}}\n\nVui lòng reply tin nhắn này để xác nhận nhà cung ứng đã đến.",
+            );
             const sentMsg = await runStep("Gửi yêu cầu xác nhận nhà cung ứng", () =>
               telegramRequest<TelegramMessage>(runtime.token, "sendMessage", {
                 chat_id: supplierTarget!.chatId,
                 message_thread_id: supplierTarget!.threadId === null ? undefined : supplierTarget!.threadId,
-                text: `📦 ${newText}\n\nVui lòng reply tin nhắn này để xác nhận nhà cung ứng đã đến.`,
+                text: renderMessageTemplate(
+                  supplierTemplate,
+                  {
+                    originalText,
+                    statusHtml,
+                    statusLine: statusHtml,
+                    userName,
+                    replyText: "",
+                    requestText: originalText,
+                    requestContext: ` (cho yêu cầu: <i>${escapeHtml(originalText)}</i>)`,
+                  },
+                  ["statusHtml", "statusLine", "requestContext"],
+                ),
                 parse_mode: "HTML",
                 reply_markup: JSON.stringify({
                   force_reply: true,
@@ -1056,11 +1171,25 @@ async function processUpdate(update: TelegramUpdate) {
         );
       }
 
+      const rejectNotifyText = renderMessageTemplate(
+        getMessageTemplate("Từ chối tin nhắn", "Đã bị từ chối: {{originalText}}"),
+        {
+          originalText,
+          userName,
+          chatTitle: cbQuery.message ? chatDisplayName(cbQuery.message) : "",
+          topicName: cbQuery.message?.message_thread_id && cbQuery.message
+            ? topicDisplayName(cbQuery.message, cbQuery.message.message_thread_id)
+            : "",
+        },
+      );
+
       await runStep(nodeNames.rejectNotify, () =>
         telegramRequest(runtime.token, "sendMessage", {
           chat_id: parsed.sourceChatId,
-          text: `Đã bị từ chối: ${originalText}`,
+          message_thread_id: parsed.threadId === null ? undefined : parsed.threadId,
+          text: rejectNotifyText,
           disable_notification: false,
+          reply_to_message_id: parsed.messageId || undefined,
         }),
       );
       runtime.handledCount += 1;
@@ -1197,6 +1326,7 @@ export async function startLocalWorkflow(options: StartOptions) {
   runtime.approvalTarget = options.approvalTarget;
   runtime.forwardTarget = options.forwardTarget;
   runtime.forwardTargets = options.forwardTargets;
+  runtime.messageTemplates = normalizeMessageTemplates(options.messageTemplates);
   runtime.active = true;
   runtime.startedAt = new Date().toISOString();
   runtime.stoppedAt = null;
@@ -1243,5 +1373,6 @@ export function getLocalWorkflowStatus(): LocalWorkflowStatus {
     approvalTarget: runtime.approvalTarget,
     forwardTarget: runtime.forwardTarget,
     forwardTargets: runtime.forwardTargets,
+    messageTemplates: runtime.messageTemplates,
   };
 }

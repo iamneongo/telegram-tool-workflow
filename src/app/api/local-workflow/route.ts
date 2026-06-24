@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
 import {
   type AllowedTopicConfig,
+  type MessageTemplateConfig,
   getLocalWorkflowStatus,
   probeWorkflowInventory,
+  refreshWorkflowInventory,
   startLocalWorkflow,
   stopLocalWorkflow,
 } from "@/lib/local-workflow-runtime";
@@ -10,12 +12,13 @@ import {
 export const dynamic = "force-dynamic";
 
 type RequestBody = {
-  action?: "start" | "stop" | "status" | "probe";
+  action?: "start" | "stop" | "status" | "probe" | "refreshInventory";
   token?: string;
   allowedTopics?: AllowedTopicConfig[];
   approvalTarget?: AllowedTopicConfig;
   forwardTarget?: AllowedTopicConfig;
   forwardTargets?: any[];
+  messageTemplates?: MessageTemplateConfig[];
 };
 
 function getToken(body: RequestBody) {
@@ -38,6 +41,7 @@ export async function POST(request: Request) {
         approvalTarget: body.approvalTarget,
         forwardTarget: body.forwardTarget,
         forwardTargets: body.forwardTargets,
+        messageTemplates: body.messageTemplates,
       });
       return NextResponse.json({ ok: true, status });
     }
@@ -50,6 +54,11 @@ export async function POST(request: Request) {
     if (action === "probe") {
       const result = await probeWorkflowInventory({ token: getToken(body) });
       return NextResponse.json({ ok: true, ...result });
+    }
+
+    if (action === "refreshInventory") {
+      const status = refreshWorkflowInventory();
+      return NextResponse.json({ ok: true, status });
     }
 
     return NextResponse.json({ ok: true, status: getLocalWorkflowStatus() });

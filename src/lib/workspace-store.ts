@@ -15,6 +15,8 @@ export type WorkspaceUiState = {
   autoPoll: boolean;
   settingsOpen: boolean;
   configOpen: boolean;
+  configPanelTab: string;
+  configPanelExpanded: boolean;
   paletteOpen: boolean;
   selectedNodeId: string;
   selectedEdgeId: string | null;
@@ -74,6 +76,8 @@ function createDefaultWorkspaceUi(): WorkspaceUiState {
     autoPoll: true,
     settingsOpen: false,
     configOpen: false,
+    configPanelTab: "target",
+    configPanelExpanded: false,
     paletteOpen: true,
     selectedNodeId: "9bfb1a1e-2ae7-41f8-aa01-c8bb9a90a1de",
     selectedEdgeId: null,
@@ -155,6 +159,9 @@ function sanitizeWorkspaceUi(raw: unknown): WorkspaceUiState {
     autoPoll: typeof raw.autoPoll === "boolean" ? raw.autoPoll : fallback.autoPoll,
     settingsOpen: typeof raw.settingsOpen === "boolean" ? raw.settingsOpen : fallback.settingsOpen,
     configOpen: typeof raw.configOpen === "boolean" ? raw.configOpen : fallback.configOpen,
+    configPanelTab: typeof raw.configPanelTab === "string" ? raw.configPanelTab : fallback.configPanelTab,
+    configPanelExpanded:
+      typeof raw.configPanelExpanded === "boolean" ? raw.configPanelExpanded : fallback.configPanelExpanded,
     paletteOpen: typeof raw.paletteOpen === "boolean" ? raw.paletteOpen : fallback.paletteOpen,
     selectedNodeId: typeof raw.selectedNodeId === "string" ? raw.selectedNodeId : fallback.selectedNodeId,
     selectedEdgeId:

@@ -641,17 +641,16 @@ async function processUpdate(update: TelegramUpdate) {
       await runStep(nodeNames.approve, () => editCallbackButtons(update), "Ẩn nút đồng ý/không đồng ý.");
 
       if (matchedTargets.length > 0) {
-        // Forward to all matched targets (N x N routing)
+        // Send message to all matched targets (N x N routing)
         for (let i = 0; i < matchedTargets.length; i++) {
           const { target, nodeName } = matchedTargets[i];
-          addLog("info", `Routing forward to: ${nodeName} (matched keywords)`, update.update_id);
-          const stepName = `${nodeNames.forward} (${nodeName})`;
+          addLog("info", `Routing send message to: ${nodeName} (matched keywords)`, update.update_id);
+          const stepName = `Gửi tin nhắn (${nodeName})`;
           await runStep(stepName, () =>
-            telegramRequest(runtime.token, "forwardMessage", {
+            telegramRequest(runtime.token, "sendMessage", {
               chat_id: target.chatId,
               message_thread_id: target.threadId === null ? undefined : target.threadId,
-              from_chat_id: parsed.sourceChatId,
-              message_id: parsed.messageId,
+              text: msgText,
             }),
           );
         }

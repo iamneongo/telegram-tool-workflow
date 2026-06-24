@@ -598,6 +598,9 @@ async function editCallbackButtons(update: TelegramUpdate) {
   });
 }
 
+// In-memory cache to map force-reply prompt message IDs to their original request texts
+const promptToRequestMap = new Map<number, string>();
+
 async function processUpdate(update: TelegramUpdate) {
   startExecution(update);
   markStep(nodeNames.trigger, "success", "Telegram Trigger nhận update.");
@@ -622,13 +625,47 @@ async function processUpdate(update: TelegramUpdate) {
         const userName = user ? ([user.first_name, user.last_name].filter(Boolean).join(" ") || user.username || `User ${user.id}`) : "Ai đó";
         const replyText = update.message.text || update.message.caption || "";
 
-        let infoText = `🔄 <b>Thông tin vật tư thay thế từ ${userName}:</b>\n\n"${replyText}"`;
-        if (!promptText.includes("Vui lòng reply tin nhắn này")) {
-          // If they replied to the original request message rather than the prompt, include the first line of the request as context
+        let requestText = "";
+        
+        // 1. Try to get original request text from the map first
+        const replyToId = update.message.reply_to_message.message_id;
+        if (promptToRequestMap.has(replyToId)) {
+          requestText = promptToRequestMap.get(replyToId) || "";
+        }
+        
+        // 2. If not in map, check if the replied-to message is the request itself
+        if (!requestText && promptText.includes("yêu cầu dùng vật tư thay thế")) {
+          requestText = promptText;
+        }
+
+        // Format the combined text
+        let combinedText = "";
+        if (requestText && requestText.includes("yêu cầu dùng vật tư thay thế")) {
+          // If the requestText contains the status sentence, let's append the replacement material details directly to it
+          // Remove trailing period if present
+          let baseText = requestText;
+          if (baseText.endsWith(".")) {
+            baseText = baseText.slice(0, -1);
+          }
+          
+          // Find the last line containing "yêu cầu dùng vật tư thay thế" and wrap it in bold
+          const lastIndex = baseText.lastIndexOf("yêu cầu dùng vật tư thay thế");
+          if (lastIndex !== -1) {
+            const startOfLine = baseText.lastIndexOf("\n", lastIndex);
+            const prefix = baseText.slice(0, startOfLine + 1);
+            const statusLine = baseText.slice(startOfLine + 1);
+            combinedText = `${prefix}<b>${statusLine}: "${replyText}"</b>`;
+          } else {
+            combinedText = `${baseText}: "${replyText}"`;
+          }
+        } else {
+          // Fallback if we don't have the full request text (only prompt text)
           const lines = promptText.split("\n").map(l => l.trim()).filter(Boolean);
           const contextLine = lines[0] || "";
-          if (contextLine) {
-            infoText = `🔄 <b>Thông tin vật tư thay thế từ ${userName}</b> (cho yêu cầu: <i>${contextLine}</i>):\n\n"${replyText}"`;
+          if (contextLine && !promptText.startsWith("Vui lòng reply tin nhắn này")) {
+            combinedText = `🔄 <b>Thông tin vật tư thay thế từ ${userName}</b> (cho yêu cầu: <i>${contextLine}</i>):\n\n"${replyText}"`;
+          } else {
+            combinedText = `🔄 <b>Thông tin vật tư thay thế từ ${userName}:</b>\n\n"${replyText}"`;
           }
         }
 
@@ -637,7 +674,7 @@ async function processUpdate(update: TelegramUpdate) {
           telegramRequest(runtime.token, "sendMessage", {
             chat_id: customTarget!.chatId,
             message_thread_id: customTarget!.threadId === null ? undefined : customTarget!.threadId,
-            text: infoText,
+            text: combinedText,
             parse_mode: "HTML",
           })
         );
@@ -710,7 +747,8 @@ async function processUpdate(update: TelegramUpdate) {
         }
 
         // Send notification to the designated group/topic if configured
-        if (customTarget) {
+        // For "vt_thay" (Có vật tư thay thế), we hold off sending the notification until they reply with the details.
+        if (customTarget && parsed.action !== "vt_thay") {
           addLog("info", `Routing material response notification to: ${targetNodePrefix} group`, update.update_id);
           await runStep(`Gửi thông báo (${targetNodePrefix})`, () =>
             telegramRequest(runtime.token, "sendMessage", {
@@ -724,8 +762,8 @@ async function processUpdate(update: TelegramUpdate) {
 
         if (parsed.action === "vt_thay") {
           // Send a force reply prompt
-          await runStep("Gửi yêu cầu nhập vật tư thay thế", () =>
-            telegramRequest(runtime.token, "sendMessage", {
+          const sentMsg = await runStep("Gửi yêu cầu nhập vật tư thay thế", () =>
+            telegramRequest<TelegramMessage>(runtime.token, "sendMessage", {
               chat_id: chatId,
               message_thread_id: cbQuery.message?.message_thread_id,
               text: `Vui lòng reply tin nhắn này với tên vật tư thay thế cho tin nhắn trên:`,
@@ -735,6 +773,9 @@ async function processUpdate(update: TelegramUpdate) {
               }),
             })
           );
+          if (sentMsg && sentMsg.message_id) {
+            promptToRequestMap.set(sentMsg.message_id, newText);
+          }
         }
       }
 

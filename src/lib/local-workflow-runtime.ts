@@ -423,11 +423,12 @@ function isAllowedMessage(message: TelegramMessage | undefined) {
 }
 
 function parseCallbackData(data: string | undefined) {
-  const [action, sourceChatId, messageId] = (data || "").split("|");
+  const [action, sourceChatId, messageId, threadId] = (data || "").split("|");
   return {
     action,
     sourceChatId: Number(sourceChatId),
     messageId: Number(messageId),
+    threadId: threadId ? (threadId === "null" || threadId === "0" ? null : Number(threadId)) : null,
   };
 }
 
@@ -600,6 +601,8 @@ async function editCallbackButtons(update: TelegramUpdate) {
 
 // In-memory cache to map force-reply prompt message IDs to their original request texts
 const promptToRequestMap = new Map<number, string>();
+// In-memory cache to map force-reply prompt message IDs to their original metadata (chat, message, thread)
+const promptToMetaMap = new Map<number, { chatId: number; messageId: number; threadId: number | null }>();
 
 async function processUpdate(update: TelegramUpdate) {
   startExecution(update);
@@ -626,11 +629,22 @@ async function processUpdate(update: TelegramUpdate) {
         const replyText = update.message.text || update.message.caption || "";
 
         let requestText = "";
-        
-        // 1. Try to get original request text from the map first
+        let sourceChatId = update.message.chat.id;
+        let sourceMessageId = update.message.reply_to_message.message_id;
+        let sourceThreadId: number | null = update.message.message_thread_id ?? null;
+
+        // 1. Try to get original request text and metadata from the map first
         const replyToId = update.message.reply_to_message.message_id;
         if (promptToRequestMap.has(replyToId)) {
           requestText = promptToRequestMap.get(replyToId) || "";
+        }
+        if (promptToMetaMap.has(replyToId)) {
+          const meta = promptToMetaMap.get(replyToId);
+          if (meta) {
+            sourceChatId = meta.chatId;
+            sourceMessageId = meta.messageId;
+            sourceThreadId = meta.threadId;
+          }
         }
         
         // 2. If not in map, check if the replied-to message is the request itself
@@ -676,6 +690,20 @@ async function processUpdate(update: TelegramUpdate) {
             message_thread_id: customTarget!.threadId === null ? undefined : customTarget!.threadId,
             text: combinedText,
             parse_mode: "HTML",
+            reply_markup: JSON.stringify({
+              inline_keyboard: [
+                [
+                  {
+                    text: "✅ Đồng ý",
+                    callback_data: `vta_ok|${sourceChatId}|${sourceMessageId}|${sourceThreadId ?? "null"}`,
+                  },
+                  {
+                    text: "❌ Không đồng ý",
+                    callback_data: `vta_no|${sourceChatId}|${sourceMessageId}|${sourceThreadId ?? "null"}`,
+                  },
+                ],
+              ],
+            }),
           })
         );
         
@@ -924,6 +952,58 @@ async function processUpdate(update: TelegramUpdate) {
       runtime.handledCount += 1;
       finishExecution("success", "Đã từ chối và gửi thông báo.");
       addLog("info", "Rejected message and notified source chat.", update.update_id);
+      return;
+    }
+
+    if (parsed.action === "vta_ok" || parsed.action === "vta_no") {
+      const cbQuery = update.callback_query;
+      if (!cbQuery) return;
+      const user = cbQuery.from;
+      if (!user) return;
+
+      const userName = [user.first_name, user.last_name].filter(Boolean).join(" ") || user.username || `User ${user.id}`;
+      const originalText = cbQuery.message?.text || cbQuery.message?.caption || "";
+      const chatId = cbQuery.message?.chat.id;
+      const messageId = cbQuery.message?.message_id;
+
+      if (chatId && messageId) {
+        // Edit callback message in target group to show decision and remove buttons
+        const isOk = parsed.action === "vta_ok";
+        const decisionText = isOk 
+          ? `\n\n✅ <b>${userName}</b> đã đồng ý dùng vật tư thay thế.`
+          : `\n\n❌ <b>${userName}</b> không đồng ý dùng vật tư thay thế.`;
+          
+        const newText = `${originalText}${decisionText}`;
+        await runStep("Cập nhật phản hồi duyệt vật tư thay thế", () =>
+          telegramRequest(runtime.token, "editMessageText", {
+            chat_id: chatId,
+            message_id: messageId,
+            text: newText,
+            parse_mode: "HTML",
+          })
+        );
+        
+        // Notify the original group
+        if (parsed.sourceChatId) {
+          const notifyText = isOk
+            ? `✅ <b>${userName}</b> đã đồng ý phương án dùng vật tư thay thế của bạn.`
+            : `❌ <b>${userName}</b> không đồng ý phương án dùng vật tư thay thế của bạn.`;
+            
+          await runStep("Thông báo kết quả duyệt vật tư thay thế về group gốc", () =>
+            telegramRequest(runtime.token, "sendMessage", {
+              chat_id: parsed.sourceChatId,
+              message_thread_id: parsed.threadId === null ? undefined : parsed.threadId,
+              text: notifyText,
+              parse_mode: "HTML",
+              reply_to_message_id: parsed.messageId || undefined,
+            })
+          );
+        }
+      }
+
+      runtime.handledCount += 1;
+      finishExecution("success", `Đã xử lý quyết định duyệt vật tư thay thế: ${parsed.action}`);
+      addLog("info", `Processed replacement material approval decision: ${parsed.action} by ${userName}`, update.update_id);
       return;
     }
 

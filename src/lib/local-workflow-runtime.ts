@@ -682,10 +682,15 @@ async function processUpdate(update: TelegramUpdate) {
           })
         );
 
-        // Find the target for the corresponding node
+        // Find the target for the corresponding node (with prefix safety checks)
         let customTarget: AllowedTopicConfig | undefined;
         if (runtime.forwardTargets) {
-          const matchedNode = runtime.forwardTargets.find((ft) => ft.nodeName.startsWith(targetNodePrefix));
+          const matchedNode = runtime.forwardTargets.find((ft) => {
+            if (targetNodePrefix === "Có vật tư") {
+              return ft.nodeName.startsWith("Có vật tư") && !ft.nodeName.includes("thay thế");
+            }
+            return ft.nodeName.startsWith(targetNodePrefix);
+          });
           if (matchedNode) {
             customTarget = matchedNode.target;
           }

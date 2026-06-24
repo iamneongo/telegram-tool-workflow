@@ -1,36 +1,34 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# telegram-tool-workflow
 
-## Getting Started
+Next.js app để quét một Telegram bot và gom các group + topic mà bot đã thấy trong
+queue update.
 
-First, run the development server:
+## Chạy local
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Mở [http://localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Cách dùng
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+1. Dán bot token vào form.
+2. Bấm `Quét bot`.
+3. Xem danh sách group, topic và các cảnh báo webhook.
+4. Dùng nút `Download CSV` để xuất dữ liệu.
 
-## Learn More
+## Lưu ý quan trọng
 
-To learn more about Next.js, take a look at the following resources:
+- Telegram Bot API không có endpoint “liệt kê tất cả group/topic” theo kiểu trực tiếp.
+- Tool này đọc `getMe`, `getWebhookInfo` và `getUpdates`, rồi gom dữ liệu từ những
+  update bot đã nhận.
+- Nếu bot chưa từng nhận message trong một group/topic, mục đó sẽ không xuất hiện.
+- Nếu webhook đang bật, bạn có thể cần tắt webhook để quét đầy đủ hơn.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Cấu trúc chính
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- `src/app/page.tsx` - UI chính
+- `src/app/api/scan/route.ts` - route server gọi Telegram Bot API
+- `src/lib/telegram.ts` - logic quét và gom group/topic

@@ -30,6 +30,7 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 dev.*.log
+.telegram-workflow-inventory.json
 
 # env files (can opt-in for committing if needed)
 .env*
@@ -40,3 +41,6 @@ dev.*.log
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# local scratch folder
+/scratch

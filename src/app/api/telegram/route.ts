@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { recordWorkflowSnapshotInventory } from "@/lib/local-workflow-runtime";
 import { deleteTelegramWebhook, scanTelegramWorkflow, TelegramApiError } from "@/lib/telegram";
 
 type RequestBody = {
@@ -41,7 +42,8 @@ export async function POST(request: Request) {
     }
 
     const result = await scanTelegramWorkflow(token, { deepScan: Boolean(body.deepScan) });
-    return NextResponse.json({ ok: true, ...result });
+    const inventory = recordWorkflowSnapshotInventory(result);
+    return NextResponse.json({ ok: true, ...result, inventory });
   } catch (error) {
     if (error instanceof TelegramApiError) {
       return NextResponse.json(

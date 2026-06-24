@@ -1,13 +1,20 @@
 import { NextResponse } from "next/server";
 import {
+  type AllowedTopicConfig,
   getLocalWorkflowStatus,
+  probeWorkflowInventory,
   startLocalWorkflow,
   stopLocalWorkflow,
 } from "@/lib/local-workflow-runtime";
 
+export const dynamic = "force-dynamic";
+
 type RequestBody = {
-  action?: "start" | "stop" | "status";
+  action?: "start" | "stop" | "status" | "probe";
   token?: string;
+  allowedTopics?: AllowedTopicConfig[];
+  approvalTarget?: AllowedTopicConfig;
+  forwardTarget?: AllowedTopicConfig;
 };
 
 function getToken(body: RequestBody) {
@@ -24,7 +31,12 @@ export async function POST(request: Request) {
     const action = body.action ?? "status";
 
     if (action === "start") {
-      const status = await startLocalWorkflow({ token: getToken(body) });
+      const status = await startLocalWorkflow({
+        token: getToken(body),
+        allowedTopics: body.allowedTopics,
+        approvalTarget: body.approvalTarget,
+        forwardTarget: body.forwardTarget,
+      });
       return NextResponse.json({ ok: true, status });
     }
 
@@ -33,10 +45,14 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: true, status });
     }
 
+    if (action === "probe") {
+      const result = await probeWorkflowInventory({ token: getToken(body) });
+      return NextResponse.json({ ok: true, ...result });
+    }
+
     return NextResponse.json({ ok: true, status: getLocalWorkflowStatus() });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Không điều khiển được local workflow.";
     return NextResponse.json({ ok: false, error: message, status: getLocalWorkflowStatus() }, { status: 500 });
   }
 }
-

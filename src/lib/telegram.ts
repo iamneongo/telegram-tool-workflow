@@ -248,16 +248,34 @@ export async function telegramRequest<T>(
     body.set(key, String(value));
   }
 
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "content-type": "application/x-www-form-urlencoded",
-    },
-    body,
-    cache: "no-store",
-  });
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+      },
+      body,
+      cache: "no-store",
+    });
+  } catch (err) {
+    const originalMessage = err instanceof Error ? err.message : String(err);
+    throw new TelegramApiError(
+      `Không thể kết nối đến Telegram API (${originalMessage}). Vui lòng kiểm tra kết nối mạng hoặc VPN/Proxy của server.`,
+      502,
+    );
+  }
 
-  const data = (await response.json()) as TelegramApiResponse<T>;
+  let data: TelegramApiResponse<T>;
+  try {
+    data = (await response.json()) as TelegramApiResponse<T>;
+  } catch (err) {
+    const originalMessage = err instanceof Error ? err.message : String(err);
+    throw new TelegramApiError(
+      `Không thể phân tích phản hồi từ Telegram API (${originalMessage}). Trạng thái phản hồi: ${response.status}.`,
+      502,
+    );
+  }
 
   if (!response.ok || !data.ok) {
     const message = data.description || `Telegram API request failed for ${method}`;

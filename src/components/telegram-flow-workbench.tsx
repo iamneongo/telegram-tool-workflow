@@ -1,6 +1,17 @@
 "use client";
 
 import {
+  ArrowPathRoundedSquareIcon,
+  ArrowRightIcon,
+  BoltIcon,
+  ChatBubbleBottomCenterTextIcon,
+  CheckCircleIcon,
+  PaperAirplaneIcon,
+  QuestionMarkCircleIcon,
+  XMarkIcon,
+  XCircleIcon,
+} from "@heroicons/react/24/outline";
+import {
   Background,
   BackgroundVariant,
   Handle,
@@ -16,10 +27,18 @@ import {
 } from "@xyflow/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { TelegramWorkflowSnapshot } from "@/lib/telegram";
+import type { WorkspaceRecord, WorkspaceRecordPatch } from "@/lib/workspace-store";
 
 type NodeAccent = "cyan" | "emerald" | "amber" | "rose";
 type NodeKind = "trigger" | "condition" | "action";
 type JsonRecord = Record<string, unknown>;
+
+type AllowedTopicSelection = {
+  chatId: number;
+  threadId: number | null;
+  chatTitle: string;
+  topicName: string;
+};
 
 type N8nCredentialRef = {
   id?: string;
@@ -61,6 +80,7 @@ type N8nWorkflowTemplate = {
 type WorkflowNodeData = {
   title: string;
   subtitle: string;
+  sourceName: string;
   kind: NodeKind;
   accent: NodeAccent;
   detail?: string;
@@ -114,12 +134,20 @@ type RuntimeStatus = {
     message: string;
     updateId?: number;
   }>;
+  allowedTopics: AllowedTopicSelection[];
+  inventory: {
+    groups: { chatId: number; chatTitle: string; chatType: string }[];
+    topics: { chatId: number; threadId: number; chatTitle: string; topicName: string }[];
+    updatedAt: string | null;
+  };
   executionSeq: number;
   currentExecution: RuntimeExecution | null;
   lastExecution: RuntimeExecution | null;
   offset?: number;
   hasToken: boolean;
 };
+
+const DEFAULT_ALLOWED_TOPICS: AllowedTopicSelection[] = [];
 
 const WORKFLOW_TEMPLATE: N8nWorkflowTemplate = {
   id: "8a2b7f18-76cf-4d64-8e6e-0f9a5e78d1f1",
@@ -157,33 +185,10 @@ const WORKFLOW_TEMPLATE: N8nWorkflowTemplate = {
       position: [-3552, -1840],
       kind: "condition",
       accent: "emerald",
-      subtitle: "allowedTopics",
+      subtitle: "0 selected",
       detail: "if",
       parameters: {
-        conditions: {
-          options: {
-            caseSensitive: false,
-            leftValue: "",
-            typeValidation: "strict",
-            version: 3,
-          },
-          conditions: [
-            {
-              leftValue:
-                '={{ (() => {\n  const chatId = Number($json.message?.chat?.id ?? $json.callback_query?.message?.chat?.id);\n  const threadId = Number($json.message?.message_thread_id ?? $json.callback_query?.message?.message_thread_id);\n\n  const allowedTopics = [\n    { chatId: -1004312722594, threadId: 4 },\n    { chatId: -1004312722594, threadId: 6 },\n    { chatId: -1004312722594, threadId: 23 }\n  ];\n\n  return allowedTopics.some(item => item.chatId === chatId && (item.threadId === null ? true : item.threadId === threadId));\n})() }}',
-              rightValue: true,
-              operator: {
-                type: "boolean",
-                operation: "equals",
-              },
-              id: "e6c0a1aa-6fb5-4f43-b8c8-8d5e3a98d5d1",
-            },
-          ],
-          combinator: "and",
-        },
-        options: {
-          ignoreCase: true,
-        },
+        allowedTopics: DEFAULT_ALLOWED_TOPICS,
       },
     },
     {
@@ -309,14 +314,14 @@ const WORKFLOW_TEMPLATE: N8nWorkflowTemplate = {
       position: [-2352, -2048],
       kind: "action",
       accent: "cyan",
-      subtitle: "editMessageText",
+      subtitle: "ẩn nút",
       detail: "telegram",
       parameters: {
-        operation: "editMessageText",
         chatId: '={{ $node["Telegram Trigger"].json.callback_query.message.chat.id }}',
         messageId: '={{ $node["Telegram Trigger"].json.callback_query.message.message_id }}',
-        text: "Đã đồng ý",
-        additionalFields: {},
+        reply_markup: {
+          inline_keyboard: [],
+        },
       },
       credentials: {
         telegramApi: { id: "YMPFyCqpGYxi4sgz", name: "Telegram account" },
@@ -334,6 +339,7 @@ const WORKFLOW_TEMPLATE: N8nWorkflowTemplate = {
       subtitle: "forwardMessage",
       detail: "custom node",
       parameters: {
+        target: null,
         destinationChatId: "-5333921701",
         sourceChatId: '={{ $node["Telegram Trigger"].json.callback_query.data.split("|")[1] }}',
         messageId: '={{ $node["Telegram Trigger"].json.callback_query.data.split("|")[2] }}',
@@ -350,14 +356,14 @@ const WORKFLOW_TEMPLATE: N8nWorkflowTemplate = {
       position: [-2352, -1808],
       kind: "action",
       accent: "rose",
-      subtitle: "editMessageText",
+      subtitle: "ẩn nút",
       detail: "telegram",
       parameters: {
-        operation: "editMessageText",
         chatId: '={{ $node["Telegram Trigger"].json.callback_query.message.chat.id }}',
         messageId: '={{ $node["Telegram Trigger"].json.callback_query.message.message_id }}',
-        text: "Không đồng ý",
-        additionalFields: {},
+        reply_markup: {
+          inline_keyboard: [],
+        },
       },
       credentials: {
         telegramApi: { id: "YMPFyCqpGYxi4sgz", name: "Telegram account" },
@@ -375,6 +381,7 @@ const WORKFLOW_TEMPLATE: N8nWorkflowTemplate = {
       subtitle: "sendMessage",
       detail: "telegram",
       parameters: {
+        target: null,
         chatId: '={{ $node["Telegram Trigger"].json.callback_query.data.split("|")[1] }}',
         text: '={{ "Đã bị từ chối: " + $node["Telegram Trigger"].json.callback_query.message.text }}',
         additionalFields: {
@@ -501,7 +508,7 @@ const NODE_PALETTE: Array<{
 }> = [
   {
     id: "telegram-send",
-    label: "Telegram Message",
+    label: "Tin nhắn Telegram",
     kind: "action",
     accent: "cyan",
     n8nType: "n8n-nodes-base.telegram",
@@ -518,7 +525,7 @@ const NODE_PALETTE: Array<{
   },
   {
     id: "telegram-edit",
-    label: "Edit Message",
+    label: "Sửa tin nhắn",
     kind: "action",
     accent: "cyan",
     n8nType: "n8n-nodes-base.telegram",
@@ -535,7 +542,7 @@ const NODE_PALETTE: Array<{
   },
   {
     id: "if-condition",
-    label: "IF Condition",
+    label: "Điều kiện",
     kind: "condition",
     accent: "emerald",
     n8nType: "n8n-nodes-base.if",
@@ -560,7 +567,7 @@ const NODE_PALETTE: Array<{
   },
   {
     id: "forward-custom",
-    label: "Forward Message",
+    label: "Chuyển tiếp",
     kind: "action",
     accent: "amber",
     n8nType: "n8n-nodes-forward-bot-telegram.forwardBotTelegram",
@@ -568,6 +575,7 @@ const NODE_PALETTE: Array<{
     detail: "custom node",
     subtitle: "forwardMessage",
     parameters: {
+      target: null,
       destinationChatId: "",
       sourceChatId: "",
       messageId: "",
@@ -598,30 +606,70 @@ const accentStyles: Record<NodeAccent, { ring: string; glow: string; text: strin
   },
 };
 
-function TelegramPlaneIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true" className="h-4 w-4 fill-white">
-      <path d="M21.5 3.2c.5-.2 1 .2.9.8l-3.2 15.1c-.1.5-.7.8-1.2.6l-4.8-2-2.3 2.7c-.4.5-1.2.4-1.4-.2l-1.2-4.8L3 13.7c-.6-.2-.6-1.1.1-1.4L21.5 3.2Zm-5.1 15.2 2.4-11.3-12 7 3.2 1.1 1.1 4.3 1.7-2 3.6 1.4Z" />
-    </svg>
-  );
+const NODE_DISPLAY_NAMES: Record<string, string> = {
+  "Telegram Trigger": "Bắt Telegram",
+  "Allowed Group Topic": "Cài đặt group/topic",
+  "Has Callback": "Kiểm tra callback",
+  "Lấy tin nhắn - 1": "Lấy callback",
+  "Lấy tin nhắn - 2": "Lấy tin nhắn",
+  "Callback Answer": "Trả lời callback",
+  "Quyết định phê duyệt": "Quyết định",
+  "Đồng ý phê duyệt": "Đồng ý",
+  "Từ chối phê duyệt": "Từ chối",
+  "Forward Tin nhắn": "Chuyển tiếp",
+  "Từ chối tin nhắn": "Báo từ chối",
+  "Gửi tin nhắn xác nhận": "Gửi xin duyệt",
+};
+
+function getNodeDisplayName(name: string) {
+  return NODE_DISPLAY_NAMES[name] ?? name;
 }
 
-function BranchIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true" className="h-4 w-4 fill-none stroke-current stroke-[2]">
-      <path d="M7 5v9.5A3.5 3.5 0 0 0 10.5 18H14" />
-      <path d="M14 6l4 4-4 4" />
-      <path d="M14 14h5" />
-    </svg>
-  );
+function getNodeSetupSummary(name: string) {
+  switch (name) {
+    case "Telegram Trigger":
+      return "Bắt update từ Telegram";
+    case "Allowed Group Topic":
+      return "Chọn group chat và topic cho phép";
+    case "Has Callback":
+      return "Tách nhánh callback và tin nhắn thường";
+    case "Lấy tin nhắn - 1":
+      return "Lấy thông tin callback";
+    case "Lấy tin nhắn - 2":
+      return "Lấy thông tin tin nhắn";
+    case "Callback Answer":
+      return "Trả lời callback";
+    case "Quyết định phê duyệt":
+      return "Kiểm tra đồng ý hay từ chối";
+    case "Đồng ý phê duyệt":
+      return "Ẩn nút đồng ý / không đồng ý";
+    case "Từ chối phê duyệt":
+      return "Ẩn nút đồng ý / không đồng ý";
+    case "Forward Tin nhắn":
+      return "Chọn nơi chuyển tiếp";
+    case "Từ chối tin nhắn":
+      return "Chọn nơi gửi thông báo từ chối";
+    case "Gửi tin nhắn xác nhận":
+      return "Gửi tin nhắn xác nhận vào group/topic";
+    default:
+      return "Đã thiết lập sẵn";
+  }
 }
 
-function BoltIcon() {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true" className="h-4 w-4 fill-current">
-      <path d="M13 2 4 14h6l-1 8 11-14h-6l-1-6Z" />
-    </svg>
-  );
+function NodeHeroIcon({ data }: { data: WorkflowNodeData }) {
+  const className = "h-5 w-5 stroke-[1.8]";
+  const sourceName = data.sourceName || data.title;
+
+  if (data.kind === "trigger") return <BoltIcon aria-hidden="true" className={className} />;
+  if (data.kind === "condition") return <ArrowPathRoundedSquareIcon aria-hidden="true" className={className} />;
+  if (sourceName.includes("Đồng ý")) return <CheckCircleIcon aria-hidden="true" className={className} />;
+  if (sourceName.includes("Từ chối")) return <XCircleIcon aria-hidden="true" className={className} />;
+  if (sourceName.includes("Forward")) return <ArrowRightIcon aria-hidden="true" className={className} />;
+  if (sourceName.includes("Gửi") || sourceName.includes("Lấy")) {
+    return <ChatBubbleBottomCenterTextIcon aria-hidden="true" className={className} />;
+  }
+  if (sourceName.includes("Callback")) return <QuestionMarkCircleIcon aria-hidden="true" className={className} />;
+  return <PaperAirplaneIcon aria-hidden="true" className={className} />;
 }
 
 function WorkflowNodeCard({ data, selected }: NodeProps<WorkflowNode>) {
@@ -636,21 +684,11 @@ function WorkflowNodeCard({ data, selected }: NodeProps<WorkflowNode>) {
           : data.executionState === "error"
             ? "border-rose-300/75 bg-rose-950/25 shadow-[0_0_0_1px_rgba(253,164,175,0.35),0_0_34px_rgba(244,63,94,0.24)]"
             : "";
-  const executionLabel =
-    data.executionState === "running"
-      ? "running"
-      : data.executionState === "success"
-        ? "done"
-        : data.executionState === "skipped"
-          ? "skip"
-          : data.executionState === "error"
-            ? "error"
-            : null;
 
   return (
     <div
       className={[
-        "relative flex h-[96px] w-[150px] flex-col rounded-[8px] border bg-[#242426] px-3 py-2 text-center",
+        "relative flex h-[74px] w-[142px] flex-col rounded-[8px] border bg-[#242426] px-3 py-2 text-center",
         "backdrop-blur-sm transition-transform duration-200",
         data.executionState === "running" ? "scale-[1.03] animate-pulse" : "",
         selected && !data.executionState ? accent.glow : "shadow-[0_14px_40px_rgba(0,0,0,0.22)]",
@@ -658,12 +696,6 @@ function WorkflowNodeCard({ data, selected }: NodeProps<WorkflowNode>) {
         executionClass,
       ].join(" ")}
     >
-      {executionLabel ? (
-        <div className="pointer-events-none absolute -right-2 -top-2 rounded-full border border-white/10 bg-[#0f1012] px-2 py-0.5 text-[8px] uppercase tracking-[0.18em] text-white/70">
-          {executionLabel}
-        </div>
-      ) : null}
-
       {data.kind !== "trigger" ? (
         <Handle type="target" position={Position.Left} className="!h-2.5 !w-2.5 !border-0 !bg-white/55" />
       ) : null}
@@ -675,20 +707,12 @@ function WorkflowNodeCard({ data, selected }: NodeProps<WorkflowNode>) {
             accent.text,
           ].join(" ")}
         >
-          {data.kind === "condition" ? (
-            <BranchIcon />
-          ) : data.kind === "trigger" ? (
-            <BoltIcon />
-          ) : (
-            <TelegramPlaneIcon />
-          )}
+          <NodeHeroIcon data={data} />
         </div>
       </div>
 
-      <div className="mt-2 space-y-0.5">
+      <div className="mt-2">
         <div className="truncate text-[12px] font-semibold leading-4 text-white">{data.title}</div>
-        <div className="truncate text-[10px] leading-4 text-white/48">{data.subtitle}</div>
-        {data.detail ? <div className="truncate text-[9px] leading-4 text-white/32">{data.detail}</div> : null}
       </div>
 
       {data.kind === "condition" ? (
@@ -698,21 +722,15 @@ function WorkflowNodeCard({ data, selected }: NodeProps<WorkflowNode>) {
             id="true"
             position={Position.Right}
             className="!h-2.5 !w-2.5 !border-0 !bg-white/55"
-            style={{ top: 34 }}
+            style={{ top: 28 }}
           />
           <Handle
             type="source"
             id="false"
             position={Position.Right}
             className="!h-2.5 !w-2.5 !border-0 !bg-white/55"
-            style={{ top: 58 }}
+            style={{ top: 48 }}
           />
-          <span className="pointer-events-none absolute right-2 top-[29px] text-[8px] uppercase tracking-[0.18em] text-white/36">
-            true
-          </span>
-          <span className="pointer-events-none absolute right-2 top-[53px] text-[8px] uppercase tracking-[0.18em] text-white/36">
-            false
-          </span>
         </>
       ) : (
         <Handle type="source" position={Position.Right} className="!h-2.5 !w-2.5 !border-0 !bg-white/55" />
@@ -727,11 +745,36 @@ function cloneTemplateNodes() {
   return structuredClone(WORKFLOW_TEMPLATE.nodes);
 }
 
+function snapshotToInventory(snapshot: TelegramWorkflowSnapshot | null): WorkspaceRecord["inventory"] | null {
+  if (!snapshot) {
+    return null;
+  }
+
+  return {
+    groups: snapshot.groups.map((group) => ({
+      chatId: group.chatId,
+      chatTitle: group.chatTitle,
+      chatType: group.chatType,
+    })),
+    topics: snapshot.topics.map((topic) => ({
+      chatId: topic.chatId,
+      threadId: topic.threadId,
+      chatTitle: topic.chatTitle,
+      topicName: topic.topicName,
+    })),
+    updatedAt: `snapshot-${snapshot.meta.updateCount}-${snapshot.meta.topicCount}-${snapshot.groups.length}-${snapshot.topics.length}`,
+  };
+}
+
 function toCanvasPosition(position: [number, number]) {
   return {
     x: Math.round((position[0] + 3824) * 0.72 + 84),
     y: Math.round((position[1] + 2064) * 0.72 + 78),
   };
+}
+
+function fromCanvasPosition(position: { x: number; y: number }): [number, number] {
+  return [Math.round((position.x - 84) / 0.72 - 3824), Math.round((position.y - 78) / 0.72 - 2064)];
 }
 
 function createNodes(configs: N8nNodeConfig[]): WorkflowNode[] {
@@ -740,8 +783,9 @@ function createNodes(configs: N8nNodeConfig[]): WorkflowNode[] {
     type: "workflowNode",
     position: toCanvasPosition(config.position),
     data: {
-      title: config.name,
+      title: getNodeDisplayName(config.name),
       subtitle: config.subtitle,
+      sourceName: config.name,
       detail: config.detail,
       kind: config.kind,
       accent: config.accent,
@@ -785,6 +829,301 @@ function formatNumber(value: number | null | undefined) {
   return typeof value === "number" ? value.toLocaleString("en-US") : "0";
 }
 
+function topicKey(topic: Pick<AllowedTopicSelection, "chatId" | "threadId">) {
+  return `${topic.chatId}:${topic.threadId ?? "all"}`;
+}
+
+function normalizeAllowedTopic(value: unknown): AllowedTopicSelection | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const item = value as Partial<AllowedTopicSelection>;
+  const chatId = Number(item.chatId);
+  const threadId = item.threadId === null || item.threadId === undefined ? null : Number(item.threadId);
+
+  if (!Number.isFinite(chatId) || (threadId !== null && !Number.isFinite(threadId))) {
+    return null;
+  }
+
+  return {
+    chatId,
+    threadId,
+    chatTitle: String(item.chatTitle || `Chat ${chatId}`),
+    topicName: String(item.topicName || (threadId === null ? "All topics" : `Topic #${threadId}`)),
+  };
+}
+
+function getAllowedTopics(parameters: JsonRecord | undefined): AllowedTopicSelection[] {
+  const raw = parameters?.allowedTopics;
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+
+  return raw.map(normalizeAllowedTopic).filter((item): item is AllowedTopicSelection => Boolean(item));
+}
+
+function getAllowedTopicsFromConfigs(configs: N8nNodeConfig[]) {
+  const node = configs.find((config) => config.name === "Allowed Group Topic");
+  return getAllowedTopics(node?.parameters);
+}
+
+function getAvailableTopics(snapshot: TelegramWorkflowSnapshot | null): AllowedTopicSelection[] {
+  if (!snapshot) {
+    return [];
+  }
+
+  const topics = snapshot.topics.map((topic) => ({
+    chatId: topic.chatId,
+    threadId: topic.threadId,
+    chatTitle: topic.chatTitle,
+    topicName: topic.topicName,
+  }));
+
+  const topicKeys = new Set(topics.map(topicKey));
+  const groupOnly = snapshot.groups
+    .filter((group) => !topics.some((topic) => topic.chatId === group.chatId))
+    .map((group) => ({
+      chatId: group.chatId,
+      threadId: null,
+      chatTitle: group.chatTitle,
+      topicName: "All messages",
+    }))
+    .filter((topic) => {
+      const key = topicKey(topic);
+      if (topicKeys.has(key)) return false;
+      topicKeys.add(key);
+      return true;
+    });
+
+  return [...topics, ...groupOnly];
+}
+
+function getAvailableTopicsFromInventory(inventory: RuntimeStatus["inventory"] | undefined): AllowedTopicSelection[] {
+  if (!inventory) {
+    return [];
+  }
+
+  const topics = inventory.topics.map((topic) => ({
+    chatId: topic.chatId,
+    threadId: topic.threadId,
+    chatTitle: topic.chatTitle,
+    topicName: topic.topicName,
+  }));
+
+  const topicKeys = new Set(topics.map(topicKey));
+  const groupOnly = inventory.groups
+    .filter((group) => !topics.some((topic) => topic.chatId === group.chatId))
+    .map((group) => ({
+      chatId: group.chatId,
+      threadId: null,
+      chatTitle: group.chatTitle,
+      topicName: "All messages",
+    }))
+    .filter((topic) => {
+      const key = topicKey(topic);
+      if (topicKeys.has(key)) return false;
+      topicKeys.add(key);
+      return true;
+    });
+
+  return [...topics, ...groupOnly];
+}
+
+type TopicPickerGroup = {
+  chatId: number;
+  chatTitle: string;
+  group: AllowedTopicSelection;
+  topics: AllowedTopicSelection[];
+};
+
+function buildTopicPickerGroups(topics: AllowedTopicSelection[]) {
+  const groups = new Map<number, TopicPickerGroup>();
+
+  for (const topic of topics) {
+    const existing = groups.get(topic.chatId);
+    if (existing) {
+      if (topic.threadId === null) {
+        existing.group = topic;
+      } else {
+        existing.topics.push(topic);
+      }
+      continue;
+    }
+
+    groups.set(topic.chatId, {
+      chatId: topic.chatId,
+      chatTitle: topic.chatTitle,
+      group: {
+        chatId: topic.chatId,
+        threadId: null,
+        chatTitle: topic.chatTitle,
+        topicName: "All messages",
+      },
+      topics: topic.threadId === null ? [] : [topic],
+    });
+  }
+
+  return Array.from(groups.values())
+    .map((group) => ({
+      ...group,
+      topics: group.topics.sort((first, second) => first.topicName.localeCompare(second.topicName)),
+    }))
+    .sort((first, second) => first.chatTitle.localeCompare(second.chatTitle));
+}
+
+function normalizeTopicSelection(value: unknown): AllowedTopicSelection | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const item = value as Partial<AllowedTopicSelection>;
+  const chatId = Number(item.chatId);
+  const threadId = item.threadId === null || item.threadId === undefined ? null : Number(item.threadId);
+
+  if (!Number.isFinite(chatId) || (threadId !== null && !Number.isFinite(threadId))) {
+    return null;
+  }
+
+  return {
+    chatId,
+    threadId,
+    chatTitle: String(item.chatTitle || `Chat ${chatId}`),
+    topicName: String(item.topicName || (threadId === null ? "All messages" : `Topic #${threadId}`)),
+  };
+}
+
+function getTopicSelection(parameters: JsonRecord | undefined) {
+  const direct = normalizeTopicSelection(parameters?.target);
+  if (direct) {
+    return direct;
+  }
+
+  const destinationChatId = parameters?.destinationChatId;
+  const parsedChatId = typeof destinationChatId === "number" || typeof destinationChatId === "string" ? Number(destinationChatId) : Number.NaN;
+  if (!Number.isFinite(parsedChatId)) {
+    const rawChatId = parameters?.chatId;
+    if (typeof rawChatId === "string" || typeof rawChatId === "number") {
+      let cleanChatId = String(rawChatId).trim();
+      if (cleanChatId.startsWith("=")) {
+        cleanChatId = cleanChatId.substring(1).trim();
+      }
+      const numChatId = Number(cleanChatId);
+      if (Number.isFinite(numChatId)) {
+        const additionalFields = parameters?.additionalFields as Record<string, unknown> | undefined;
+        const rawThreadId = additionalFields?.message_thread_id ?? parameters?.message_thread_id;
+        const threadId = rawThreadId === null || rawThreadId === undefined
+          ? null
+          : Number(String(rawThreadId).replace(/^=/, ""));
+        return {
+          chatId: numChatId,
+          threadId: Number.isFinite(threadId) ? threadId : null,
+          chatTitle: `Chat ${numChatId}`,
+          topicName: threadId === null ? "All messages" : `Topic #${threadId}`,
+        };
+      }
+    }
+    return null;
+  }
+
+  const destinationThreadId = parameters?.destinationThreadId;
+  const parsedThreadId =
+    destinationThreadId === null || destinationThreadId === undefined
+      ? null
+      : typeof destinationThreadId === "number" || typeof destinationThreadId === "string"
+        ? Number(destinationThreadId)
+        : Number.NaN;
+
+  if (parsedThreadId !== null && !Number.isFinite(parsedThreadId)) {
+    return null;
+  }
+
+  return {
+    chatId: parsedChatId,
+    threadId: parsedThreadId,
+    chatTitle: typeof parameters?.destinationChatTitle === "string" && parameters.destinationChatTitle.trim()
+      ? parameters.destinationChatTitle.trim()
+      : `Chat ${parsedChatId}`,
+    topicName:
+      typeof parameters?.destinationTopicName === "string" && parameters.destinationTopicName.trim()
+        ? parameters.destinationTopicName.trim()
+        : parsedThreadId === null
+          ? "All messages"
+          : `Topic #${parsedThreadId}`,
+  };
+}
+
+function getTargetFromConfig(configs: N8nNodeConfig[], nodeName: string) {
+  const node = configs.find((config) => config.name === nodeName);
+  if (!node) return undefined;
+  const target = getTopicSelection(node.parameters);
+  if (!target || !target.chatId) return undefined;
+  return target;
+}
+
+function formatTopicSelectionLabel(target: AllowedTopicSelection | null) {
+  if (!target) {
+    return "Chưa chọn";
+  }
+
+  return target.threadId === null ? target.chatTitle : `${target.chatTitle} / ${formatTopicDisplayName(target.topicName)}`;
+}
+
+function formatTopicDisplayName(topicName: string) {
+  const value = topicName.trim();
+  if (!value) {
+    return "Topic";
+  }
+
+  return value;
+}
+
+function mergeWorkflowSnapshots(
+  previous: TelegramWorkflowSnapshot | null,
+  next: TelegramWorkflowSnapshot,
+): TelegramWorkflowSnapshot {
+  if (!previous) {
+    return next;
+  }
+
+  const groups = new Map<number, TelegramWorkflowSnapshot["groups"][number]>();
+  for (const group of previous.groups) groups.set(group.chatId, group);
+  for (const group of next.groups) groups.set(group.chatId, group);
+
+  const topics = new Map<string, TelegramWorkflowSnapshot["topics"][number]>();
+  for (const topic of previous.topics) topics.set(`${topic.chatId}:${topic.threadId}`, topic);
+  for (const topic of next.topics) topics.set(`${topic.chatId}:${topic.threadId}`, topic);
+
+  const updates = new Map<number, TelegramWorkflowSnapshot["updates"][number]>();
+  for (const update of previous.updates) updates.set(update.updateId, update);
+  for (const update of next.updates) updates.set(update.updateId, update);
+
+  const mergedUpdates = Array.from(updates.values())
+    .sort((first, second) => {
+      const firstTime = first.date ? new Date(first.date).getTime() : 0;
+      const secondTime = second.date ? new Date(second.date).getTime() : 0;
+      return secondTime - firstTime || second.updateId - first.updateId;
+    })
+    .slice(0, 250);
+
+  const mergedGroups = Array.from(groups.values());
+  const mergedTopics = Array.from(topics.values());
+
+  return {
+    ...next,
+    updates: mergedUpdates,
+    groups: mergedGroups,
+    topics: mergedTopics,
+    warnings: Array.from(new Set([...next.warnings, ...previous.warnings])).slice(0, 6),
+    meta: {
+      ...next.meta,
+      updateCount: mergedUpdates.length,
+      uniqueChatCount: mergedGroups.length,
+      topicCount: mergedTopics.length,
+    },
+  };
+}
+
 function stringifyJson(value: unknown) {
   return JSON.stringify(value, null, 2);
 }
@@ -802,6 +1141,15 @@ function getParameterSubtitle(parameters: JsonRecord, fallback: string) {
 }
 
 function normalizeSubtitle(snapshot: TelegramWorkflowSnapshot | null, config: N8nNodeConfig) {
+  if (config.name === "Allowed Group Topic") {
+    return `${formatNumber(getAllowedTopics(config.parameters).length)} selected`;
+  }
+
+  if (config.name === "Forward Tin nhắn" || config.name === "Từ chối tin nhắn") {
+    const target = getTopicSelection(config.parameters);
+    return target ? formatTopicSelectionLabel(target) : "select target";
+  }
+
   if (!snapshot) {
     return getParameterSubtitle(config.parameters, config.subtitle);
   }
@@ -809,8 +1157,6 @@ function normalizeSubtitle(snapshot: TelegramWorkflowSnapshot | null, config: N8
   switch (config.name) {
     case "Telegram Trigger":
       return snapshot.webhook.url ? "Webhook on" : "getUpdates";
-    case "Allowed Group Topic":
-      return `${formatNumber(snapshot.groups.length)} groups`;
     case "Has Callback":
       return `${formatNumber(snapshot.topics.length)} topics`;
     case "Lấy tin nhắn - 1":
@@ -820,6 +1166,10 @@ function normalizeSubtitle(snapshot: TelegramWorkflowSnapshot | null, config: N8
       return snapshot.webhook.pending_update_count > 0 ? "pending replies" : "answerCallbackQuery";
     case "Quyết định phê duyệt":
       return snapshot.warnings.length > 0 ? "pending review" : "if approved";
+    case "Đồng ý phê duyệt":
+      return "ẩn nút";
+    case "Từ chối phê duyệt":
+      return "ẩn nút";
     case "Forward Tin nhắn":
       return `${formatNumber(snapshot.groups.length)} chats`;
     case "Từ chối tin nhắn":
@@ -829,26 +1179,6 @@ function normalizeSubtitle(snapshot: TelegramWorkflowSnapshot | null, config: N8
     default:
       return getParameterSubtitle(config.parameters, config.subtitle);
   }
-}
-
-function buildExportWorkflow(configs: N8nNodeConfig[], connections: N8nConnections, active: boolean) {
-  return {
-    id: WORKFLOW_TEMPLATE.id,
-    name: WORKFLOW_TEMPLATE.name,
-    active,
-    settings: WORKFLOW_TEMPLATE.settings,
-    nodes: configs.map((config) => ({
-      id: config.id,
-      name: config.name,
-      type: config.n8nType,
-      typeVersion: config.typeVersion,
-      position: config.position,
-      parameters: config.parameters,
-      credentials: config.credentials,
-      webhookId: config.webhookId,
-    })),
-    connections,
-  };
 }
 
 function createDroppedNodeConfig(templateId: string, index: number): N8nNodeConfig | null {
@@ -878,11 +1208,12 @@ function createDroppedNodeConfig(templateId: string, index: number): N8nNodeConf
 
 export default function TelegramFlowWorkbench() {
   const [token, setToken] = useState("");
-  const [deepScan, setDeepScan] = useState(false);
-  const [autoPoll, setAutoPoll] = useState(false);
+  const [deepScan, setDeepScan] = useState(true);
+  const [autoPoll, setAutoPoll] = useState(true);
   const [workflowActive, setWorkflowActive] = useState(false);
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null);
   const [runtimeBusy, setRuntimeBusy] = useState(false);
+  const [probeBusy, setProbeBusy] = useState(false);
   const [isFetching, setIsFetching] = useState(false);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [snapshot, setSnapshot] = useState<TelegramWorkflowSnapshot | null>(null);
@@ -891,20 +1222,24 @@ export default function TelegramFlowWorkbench() {
   const [configOpen, setConfigOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(true);
   const [nodeConfigs, setNodeConfigs] = useState<N8nNodeConfig[]>(cloneTemplateNodes);
-  const [parameterDrafts, setParameterDrafts] = useState<Record<string, string>>(() =>
+  const [, setParameterDrafts] = useState<Record<string, string>>(() =>
     Object.fromEntries(WORKFLOW_TEMPLATE.nodes.map((node) => [node.id, stringifyJson(node.parameters)])),
   );
-  const [parameterError, setParameterError] = useState<string | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string>("9bfb1a1e-2ae7-41f8-aa01-c8bb9a90a1de");
   const [nodes, setNodes, onNodesChange] = useNodesState<WorkflowNode>(createNodes(WORKFLOW_TEMPLATE.nodes));
-  const [edges] = useEdgesState(createEdges(WORKFLOW_TEMPLATE.nodes));
+  const [edges, setEdges, onEdgesChange] = useEdgesState(createEdges(WORKFLOW_TEMPLATE.nodes));
   const [toast, setToast] = useState<string | null>(null);
   const [flowInstance, setFlowInstance] = useState<ReactFlowInstance<WorkflowNode, Edge> | null>(null);
+  const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
+  const [hydrated, setHydrated] = useState(false);
 
   const inFlightRef = useRef(false);
   const intervalRef = useRef<number | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const toastTimerRef = useRef<number | null>(null);
+  const snapshotRef = useRef<TelegramWorkflowSnapshot | null>(null);
+  const workspaceSaveTimerRef = useRef<number | null>(null);
+  const workspaceSignatureRef = useRef<string>("");
 
   const selectedConfig = useMemo(
     () => nodeConfigs.find((node) => node.id === selectedNodeId) ?? nodeConfigs[0],
@@ -914,14 +1249,29 @@ export default function TelegramFlowWorkbench() {
     () => nodes.find((node) => node.id === selectedNodeId) ?? nodes[0],
     [nodes, selectedNodeId],
   );
-  const exportJson = useMemo(
-    () => stringifyJson(buildExportWorkflow(nodeConfigs, WORKFLOW_TEMPLATE.connections, workflowActive)),
-    [nodeConfigs, workflowActive],
+  const selectedEdge = useMemo(
+    () => edges.find((edge) => edge.id === selectedEdgeId) ?? null,
+    [edges, selectedEdgeId],
   );
-  const selectedOutgoing = useMemo(() => {
-    if (!selectedConfig) return [];
-    return WORKFLOW_TEMPLATE.connections[selectedConfig.name]?.main ?? [];
-  }, [selectedConfig]);
+  const nodeNameById = useMemo(() => new Map(nodeConfigs.map((node) => [node.id, node.name])), [nodeConfigs]);
+  const selectedEdgeLabel = selectedEdge
+    ? `${nodeNameById.get(selectedEdge.source) ?? "Node"} → ${nodeNameById.get(selectedEdge.target) ?? "Node"}`
+    : null;
+  const selectedAllowedTopics = useMemo(
+    () => (selectedConfig?.name === "Allowed Group Topic" ? getAllowedTopics(selectedConfig.parameters) : []),
+    [selectedConfig],
+  );
+  const availableTopics = useMemo(() => {
+    const available = [...getAvailableTopicsFromInventory(runtimeStatus?.inventory), ...getAvailableTopics(snapshot)];
+    const seen = new Set<string>();
+
+    return available.filter((topic) => {
+      const key = topicKey(topic);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }, [runtimeStatus?.inventory, snapshot]);
   const visibleExecution = runtimeStatus?.currentExecution ?? runtimeStatus?.lastExecution ?? null;
   const executionVisuals = useMemo(() => {
     const nameToConfig = new Map(nodeConfigs.map((config) => [config.name, config]));
@@ -968,11 +1318,13 @@ export default function TelegramFlowWorkbench() {
     () =>
       edges.map((edge) => {
         const highlighted = executionVisuals.edgeKeys.has(`${edge.source}->${edge.target}`);
-        if (!highlighted) return edge;
+        const selected = edge.id === selectedEdgeId;
+        if (!highlighted && !selected) return edge;
 
         const targetStatus = executionVisuals.statusByNodeId.get(edge.target);
-        const stroke =
-          targetStatus === "error"
+        const stroke = selected
+          ? "rgba(125,211,252,0.98)"
+          : targetStatus === "error"
             ? "rgba(251,113,133,0.95)"
             : targetStatus === "skipped"
               ? "rgba(251,191,36,0.86)"
@@ -981,11 +1333,11 @@ export default function TelegramFlowWorkbench() {
         return {
           ...edge,
           animated: targetStatus !== "skipped",
-          style: { ...edge.style, stroke, strokeWidth: 2.6 },
+          style: { ...edge.style, stroke, strokeWidth: selected ? 3.2 : 2.6 },
           markerEnd: { type: MarkerType.ArrowClosed, color: stroke },
         };
       }),
-    [edges, executionVisuals],
+    [edges, executionVisuals, selectedEdgeId],
   );
 
   const showToast = useCallback((message: string) => {
@@ -996,17 +1348,138 @@ export default function TelegramFlowWorkbench() {
     toastTimerRef.current = window.setTimeout(() => setToast(null), 2200);
   }, []);
 
-  const copyText = useCallback(
-    async (value: string, message: string) => {
-      try {
-        await navigator.clipboard.writeText(value);
-        showToast(message);
-      } catch {
-        showToast("Không copy được");
-      }
-    },
-    [showToast],
+  const workspacePatch = useMemo<WorkspaceRecordPatch>(
+    () => ({
+      ui: {
+        token,
+        deepScan,
+        autoPoll,
+        settingsOpen,
+        configOpen,
+        paletteOpen,
+        selectedNodeId,
+        selectedEdgeId,
+        nodeConfigs,
+        edges,
+        snapshot,
+        runtimeStatus,
+      },
+      inventory: snapshotToInventory(snapshot) ?? runtimeStatus?.inventory ?? undefined,
+    }),
+    [
+      autoPoll,
+      configOpen,
+      deepScan,
+      edges,
+      nodeConfigs,
+      paletteOpen,
+      runtimeStatus,
+      selectedEdgeId,
+      selectedNodeId,
+      settingsOpen,
+      snapshot,
+      token,
+    ],
   );
+
+  const workspaceSignature = useMemo(() => JSON.stringify(workspacePatch), [workspacePatch]);
+
+  const persistWorkspaceState = useCallback(async (patch?: WorkspaceRecordPatch) => {
+    const payload = patch ?? workspacePatch;
+    try {
+      await fetch("/api/workspace-state", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+    } catch {
+      // Best-effort only.
+    }
+  }, [workspacePatch]);
+
+  useEffect(() => {
+    if (!hydrated) {
+      return;
+    }
+
+    if (workspaceSignatureRef.current === "") {
+      workspaceSignatureRef.current = workspaceSignature;
+      return;
+    }
+
+    if (workspaceSignature === workspaceSignatureRef.current) {
+      return;
+    }
+
+    if (workspaceSaveTimerRef.current) {
+      clearTimeout(workspaceSaveTimerRef.current);
+    }
+
+    workspaceSaveTimerRef.current = window.setTimeout(() => {
+      workspaceSaveTimerRef.current = null;
+      workspaceSignatureRef.current = workspaceSignature;
+      void persistWorkspaceState();
+    }, 450);
+
+    return () => {
+      if (workspaceSaveTimerRef.current) {
+        clearTimeout(workspaceSaveTimerRef.current);
+        workspaceSaveTimerRef.current = null;
+      }
+    };
+  }, [hydrated, persistWorkspaceState, workspaceSignature]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadWorkspaceState() {
+      try {
+        const response = await fetch("/api/workspace-state", { cache: "no-store" });
+        const payload = (await response.json()) as { ok: boolean; state?: WorkspaceRecord; exists?: boolean; error?: string };
+
+        if (!response.ok || !payload.ok || !payload.state || cancelled) {
+          return;
+        }
+
+        const state = payload.state;
+
+        setToken(state.ui.token);
+        setDeepScan(state.ui.deepScan);
+        setAutoPoll(state.ui.autoPoll);
+        setSettingsOpen(state.ui.settingsOpen);
+        setConfigOpen(state.ui.configOpen);
+        setPaletteOpen(state.ui.paletteOpen);
+        setSelectedNodeId(state.ui.selectedNodeId);
+        setSelectedEdgeId(state.ui.selectedEdgeId);
+        setSnapshot(state.ui.snapshot);
+        snapshotRef.current = state.ui.snapshot;
+        setRuntimeStatus((state.ui.runtimeStatus as RuntimeStatus | null) ?? null);
+        setWorkflowActive(Boolean((state.ui.runtimeStatus as RuntimeStatus | null)?.active));
+
+        if (payload.exists) {
+          const loadedNodeConfigs = state.ui.nodeConfigs as N8nNodeConfig[];
+          setNodeConfigs(loadedNodeConfigs);
+          setNodes(createNodes(loadedNodeConfigs));
+          setEdges(state.ui.edges as Edge[]);
+          setParameterDrafts(
+            Object.fromEntries(loadedNodeConfigs.map((node) => [node.id, stringifyJson(node.parameters)])),
+          );
+        }
+      } catch {
+        // Use in-memory defaults when workspace storage is unavailable.
+      } finally {
+        if (!cancelled) {
+          setHydrated(true);
+        }
+      }
+    }
+
+    void loadWorkspaceState();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [setEdges, setNodes]);
 
   const syncNodes = useCallback(
     (configs: N8nNodeConfig[], nextSnapshot: TelegramWorkflowSnapshot | null) => {
@@ -1019,8 +1492,9 @@ export default function TelegramFlowWorkbench() {
             ...node,
             data: {
               ...node.data,
-              title: config.name,
+              title: getNodeDisplayName(config.name),
               subtitle: normalizeSubtitle(nextSnapshot, config),
+              sourceName: config.name,
               detail: config.detail,
               kind: config.kind,
               accent: config.accent,
@@ -1032,67 +1506,22 @@ export default function TelegramFlowWorkbench() {
     [setNodes],
   );
 
-  const updateSelectedConfig = useCallback(
-    (patch: Partial<N8nNodeConfig>) => {
-      setNodeConfigs((current) => {
-        const next = current.map((node) => (node.id === selectedNodeId ? { ...node, ...patch } : node));
-        syncNodes(next, snapshot);
-        return next;
-      });
-    },
-    [selectedNodeId, snapshot, syncNodes],
-  );
-
-  const applyParameters = useCallback(() => {
-    if (!selectedConfig) return;
-
-    try {
-      const parsed = JSON.parse(parameterDrafts[selectedConfig.id] ?? "{}") as JsonRecord;
-      setParameterError(null);
-      setNodeConfigs((current) => {
-        const next = current.map((node) =>
-          node.id === selectedConfig.id
-            ? {
-                ...node,
-                parameters: parsed,
-                subtitle: getParameterSubtitle(parsed, node.subtitle),
-              }
-            : node,
-        );
-        syncNodes(next, snapshot);
-        return next;
-      });
-      showToast("Đã cập nhật node");
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "JSON không hợp lệ";
-      setParameterError(message);
-    }
-  }, [parameterDrafts, selectedConfig, showToast, snapshot, syncNodes]);
-
-  const resetParameters = useCallback(() => {
-    if (!selectedConfig) return;
-    setParameterDrafts((current) => ({
-      ...current,
-      [selectedConfig.id]: stringifyJson(selectedConfig.parameters),
-    }));
-    setParameterError(null);
-  }, [selectedConfig]);
-
   const addNodeFromPalette = useCallback(
     (templateId: string, point: { x: number; y: number }) => {
       const nextIndex = nodeConfigs.length + 1;
       const nextConfig = createDroppedNodeConfig(templateId, nextIndex);
       if (!nextConfig) return;
 
-      nextConfig.position = [Math.round((point.x - 84) / 0.72 - 3824), Math.round((point.y - 78) / 0.72 - 2064)];
+      nextConfig.position = fromCanvasPosition(point);
       const nextNode: WorkflowNode = {
         id: nextConfig.id,
         type: "workflowNode",
         position: point,
         data: {
-          title: nextConfig.name,
+          title: getNodeDisplayName(nextConfig.name),
           subtitle: nextConfig.subtitle,
           detail: nextConfig.detail,
+          sourceName: nextConfig.name,
           kind: nextConfig.kind,
           accent: nextConfig.accent,
         },
@@ -1110,6 +1539,16 @@ export default function TelegramFlowWorkbench() {
     },
     [nodeConfigs.length, setNodes, showToast],
   );
+
+  const removeSelectedEdge = useCallback(() => {
+    if (!selectedEdgeId) {
+      return;
+    }
+
+    setEdges((current) => current.filter((edge) => edge.id !== selectedEdgeId));
+    setSelectedEdgeId(null);
+    showToast("Đã xóa line connect");
+  }, [selectedEdgeId, setEdges, showToast]);
 
   const handleDragStart = useCallback((event: React.DragEvent<HTMLButtonElement>, templateId: string) => {
     event.dataTransfer.setData("application/x-n8n-node", templateId);
@@ -1135,6 +1574,112 @@ export default function TelegramFlowWorkbench() {
     event.preventDefault();
     event.dataTransfer.dropEffect = "copy";
   }, []);
+
+  const handleNodeDragStop = useCallback((_: MouseEvent | TouchEvent, node: WorkflowNode) => {
+    setNodeConfigs((current) =>
+      current.map((config) => (config.id === node.id ? { ...config, position: fromCanvasPosition(node.position) } : config)),
+    );
+  }, []);
+
+  const setAllowedTopicsForSelectedNode = useCallback(
+    (topics: AllowedTopicSelection[]) => {
+      if (!selectedConfig || selectedConfig.name !== "Allowed Group Topic") {
+        return;
+      }
+
+      const nextTopics = topics;
+      setNodeConfigs((current) => {
+        const next = current.map((node) =>
+          node.id === selectedConfig.id
+            ? {
+                ...node,
+                parameters: {
+                  ...node.parameters,
+                  allowedTopics: nextTopics,
+                },
+              }
+            : node,
+        );
+        syncNodes(next, snapshot);
+        return next;
+      });
+      setParameterDrafts((current) => ({
+        ...current,
+        [selectedConfig.id]: stringifyJson({
+          ...selectedConfig.parameters,
+          allowedTopics: nextTopics,
+        }),
+      }));
+    },
+    [selectedConfig, snapshot, syncNodes],
+  );
+
+  const setTargetForSelectedNode = useCallback(
+    (target: AllowedTopicSelection | null) => {
+      if (
+        !selectedConfig ||
+        (selectedConfig.name !== "Forward Tin nhắn" &&
+          selectedConfig.name !== "Từ chối tin nhắn" &&
+          selectedConfig.name !== "Gửi tin nhắn xác nhận")
+      ) {
+        return;
+      }
+
+      setNodeConfigs((current) => {
+        const next = current.map((node) => {
+          if (node.id !== selectedConfig.id) {
+            return node;
+          }
+
+          const nextParams: JsonRecord = {
+            ...node.parameters,
+            target,
+          };
+
+          if (node.name === "Forward Tin nhắn") {
+            nextParams.destinationChatId = target ? String(target.chatId) : "";
+          } else if (node.name === "Gửi tin nhắn xác nhận") {
+            nextParams.chatId = target ? `=-${Math.abs(target.chatId)}` : "";
+            nextParams.additionalFields = {
+              ...(nextParams.additionalFields as JsonRecord || {}),
+              message_thread_id: target?.threadId ?? null,
+            };
+          }
+
+          return {
+            ...node,
+            parameters: nextParams,
+          };
+        });
+        syncNodes(next, snapshot);
+        return next;
+      });
+      setParameterDrafts((current) => {
+        const node = nodeConfigs.find((n) => n.id === selectedConfig.id);
+        const currentParams = node ? node.parameters : {};
+        const nextParams: JsonRecord = {
+          ...currentParams,
+          target,
+        };
+
+        if (selectedConfig.name === "Forward Tin nhắn") {
+          nextParams.destinationChatId = target ? String(target.chatId) : "";
+        } else if (selectedConfig.name === "Gửi tin nhắn xác nhận") {
+          nextParams.chatId = target ? `=-${Math.abs(target.chatId)}` : "";
+          nextParams.additionalFields = {
+            ...(nextParams.additionalFields as JsonRecord || {}),
+            message_thread_id: target?.threadId ?? null,
+          };
+        }
+
+        return {
+          ...current,
+          [selectedConfig.id]: stringifyJson(nextParams),
+        };
+      });
+    },
+    [nodeConfigs, selectedConfig, snapshot, syncNodes],
+  );
 
   const applyRuntimeStatus = useCallback((nextStatus: RuntimeStatus) => {
     setRuntimeStatus(nextStatus);
@@ -1164,6 +1709,9 @@ export default function TelegramFlowWorkbench() {
         body: JSON.stringify({
           action: "start",
           token: token.trim() || undefined,
+          allowedTopics: getAllowedTopicsFromConfigs(nodeConfigs),
+          approvalTarget: getTargetFromConfig(nodeConfigs, "Gửi tin nhắn xác nhận"),
+          forwardTarget: getTargetFromConfig(nodeConfigs, "Forward Tin nhắn"),
         }),
       });
       const payload = (await response.json()) as { ok: boolean; status?: RuntimeStatus; error?: string };
@@ -1176,13 +1724,13 @@ export default function TelegramFlowWorkbench() {
       setStatus({ kind: "success", text: "Local workflow started" });
       showToast("Local workflow started");
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Không start được local workflow.";
+      const message = getCleanErrorMessage(error, "Không start được local workflow.");
       setStatus({ kind: "error", text: message });
       showToast(message);
     } finally {
       setRuntimeBusy(false);
     }
-  }, [applyRuntimeStatus, showToast, token]);
+  }, [applyRuntimeStatus, nodeConfigs, showToast, token]);
 
   const stopWorkflow = useCallback(async () => {
     setRuntimeBusy(true);
@@ -1204,7 +1752,7 @@ export default function TelegramFlowWorkbench() {
       setStatus({ kind: "idle", text: "Local workflow stopped" });
       showToast("Local workflow stopped");
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Không stop được local workflow.";
+      const message = getCleanErrorMessage(error, "Không stop được local workflow.");
       setStatus({ kind: "error", text: message });
       showToast(message);
     } finally {
@@ -1212,13 +1760,57 @@ export default function TelegramFlowWorkbench() {
     }
   }, [applyRuntimeStatus, showToast]);
 
-  const fetchWorkflow = useCallback(async () => {
-    if (!workflowActive) {
-      setStatus({ kind: "idle", text: "Workflow stopped" });
-      showToast("Workflow is stopped");
+  const probeInventory = useCallback(async () => {
+    if (probeBusy || workflowActive) {
       return;
     }
 
+    setProbeBusy(true);
+    setStatus({ kind: "loading", text: "Probing inventory" });
+
+    try {
+      const response = await fetch("/api/local-workflow", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "probe",
+          token: token.trim() || undefined,
+        }),
+      });
+
+      const payload = (await response.json()) as {
+        ok: boolean;
+        status?: RuntimeStatus;
+        probedGroups?: number;
+        probedTopics?: number;
+        failedTargets?: string[];
+        error?: string;
+      };
+
+      if (!response.ok || !payload.ok) {
+        throw new Error(payload.error || "Không probe được inventory.");
+      }
+
+      if (payload.status) {
+        applyRuntimeStatus(payload.status);
+      }
+
+      const parts = [
+        payload.probedGroups ? `${payload.probedGroups} group` : null,
+        payload.probedTopics ? `${payload.probedTopics} topic` : null,
+      ].filter(Boolean);
+      showToast(parts.length ? `Probe xong ${parts.join(" / ")}` : "Probe xong");
+      setStatus({ kind: "success", text: `Probe xong ${parts.join(" / ") || "inventory"}` });
+    } catch (error) {
+      const message = getCleanErrorMessage(error, "Không probe được inventory.");
+      setStatus({ kind: "error", text: message });
+      showToast(message);
+    } finally {
+      setProbeBusy(false);
+    }
+  }, [applyRuntimeStatus, probeBusy, showToast, token, workflowActive]);
+
+  const fetchWorkflow = useCallback(async (options: { silent?: boolean } = {}) => {
     if (inFlightRef.current) {
       return;
     }
@@ -1226,7 +1818,9 @@ export default function TelegramFlowWorkbench() {
     const trimmedToken = token.trim();
     inFlightRef.current = true;
     setIsFetching(true);
-    setStatus({ kind: "loading", text: "Loading workflow" });
+    if (!options.silent) {
+      setStatus({ kind: "loading", text: "Loading workflow" });
+    }
 
     if (abortRef.current) {
       abortRef.current.abort();
@@ -1254,22 +1848,31 @@ export default function TelegramFlowWorkbench() {
       }
 
       const nextSnapshot = payload as TelegramWorkflowSnapshot;
-      setSnapshot(nextSnapshot);
-      setStatus({ kind: "success", text: `Quét xong ${formatNumber(nextSnapshot.meta.updateCount)} update` });
-      syncNodes(nodeConfigs, nextSnapshot);
-      showToast(nextSnapshot.warnings[0] ?? "Workflow updated");
+      const mergedSnapshot = mergeWorkflowSnapshots(snapshotRef.current, nextSnapshot);
+      snapshotRef.current = mergedSnapshot;
+      setSnapshot(mergedSnapshot);
+      setStatus({
+        kind: "success",
+        text: `Đã scan ${formatNumber(mergedSnapshot.groups.length)} group / ${formatNumber(mergedSnapshot.topics.length)} topic`,
+      });
+      syncNodes(nodeConfigs, mergedSnapshot);
+      if (!options.silent) {
+        showToast(nextSnapshot.warnings[0] ?? "Đã cập nhật group/topic");
+      }
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Không quét được Telegram";
+      const message = getCleanErrorMessage(error, "Không quét được Telegram");
       if (message !== "The operation was aborted.") {
-        setStatus({ kind: "error", text: message });
-        showToast(message);
+        if (!options.silent) {
+          setStatus({ kind: "error", text: message });
+          showToast(message);
+        }
       }
     } finally {
       inFlightRef.current = false;
       setIsFetching(false);
       abortRef.current = null;
     }
-  }, [deepScan, nodeConfigs, showToast, syncNodes, token, workflowActive]);
+  }, [deepScan, nodeConfigs, showToast, syncNodes, token]);
 
   const handleDeleteWebhook = useCallback(async () => {
     if (deleteBusy) {
@@ -1299,7 +1902,7 @@ export default function TelegramFlowWorkbench() {
       showToast("Webhook off");
       await fetchWorkflow();
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Không tắt được webhook";
+      const message = getCleanErrorMessage(error, "Không tắt được webhook");
       setStatus({ kind: "error", text: message });
       showToast(message);
     } finally {
@@ -1308,7 +1911,7 @@ export default function TelegramFlowWorkbench() {
   }, [deleteBusy, fetchWorkflow, showToast, token]);
 
   useEffect(() => {
-    if (!autoPoll || !workflowActive) {
+    if (!hydrated || !autoPoll || workflowActive) {
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
         intervalRef.current = null;
@@ -1317,12 +1920,12 @@ export default function TelegramFlowWorkbench() {
     }
 
     const kickoff = window.setTimeout(() => {
-      void fetchWorkflow();
+      void fetchWorkflow({ silent: true });
     }, 0);
 
     intervalRef.current = window.setInterval(() => {
-      void fetchWorkflow();
-    }, 5000);
+      void fetchWorkflow({ silent: true });
+    }, 12000);
 
     return () => {
       window.clearTimeout(kickoff);
@@ -1331,7 +1934,7 @@ export default function TelegramFlowWorkbench() {
         intervalRef.current = null;
       }
     };
-  }, [autoPoll, fetchWorkflow, workflowActive]);
+  }, [autoPoll, fetchWorkflow, hydrated, workflowActive]);
 
   useEffect(
     () => () => {
@@ -1340,6 +1943,9 @@ export default function TelegramFlowWorkbench() {
       }
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
+      }
+      if (workspaceSaveTimerRef.current) {
+        clearTimeout(workspaceSaveTimerRef.current);
       }
       if (toastTimerRef.current) {
         clearTimeout(toastTimerRef.current);
@@ -1363,9 +1969,8 @@ export default function TelegramFlowWorkbench() {
     };
   }, [refreshRuntimeStatus]);
 
-  const botName = snapshot?.bot.first_name ?? "Telegram Bot";
-  const botUser = snapshot?.bot.username ? `@${snapshot.bot.username}` : "token pending";
-  const pendingCount = snapshot?.webhook.pending_update_count ?? 0;
+  const inventoryGroupCount = runtimeStatus?.inventory.groups.length ?? 0;
+  const inventoryTopicCount = runtimeStatus?.inventory.topics.length ?? 0;
   const workflowStateLabel = workflowActive ? "Active" : "Stopped";
   const workflowStateClass = workflowActive ? "text-emerald-300" : "text-rose-300";
   const runtimeHandled = runtimeStatus?.handledCount ?? 0;
@@ -1373,14 +1978,6 @@ export default function TelegramFlowWorkbench() {
   const runtimeLastUpdate = runtimeStatus?.lastUpdateAt
     ? new Date(runtimeStatus.lastUpdateAt).toLocaleTimeString()
     : "None";
-  const executionStatusClass =
-    visibleExecution?.status === "error"
-      ? "text-rose-300"
-      : visibleExecution?.status === "skipped"
-        ? "text-amber-300"
-        : visibleExecution?.status === "running"
-          ? "text-sky-300"
-          : "text-emerald-300";
   const statusColor =
     status.kind === "error"
       ? "text-rose-300"
@@ -1399,18 +1996,32 @@ export default function TelegramFlowWorkbench() {
           nodes={visualNodes}
           edges={visualEdges}
           onNodesChange={onNodesChange}
+          onEdgesChange={onEdgesChange}
           onInit={setFlowInstance}
           onDrop={handleCanvasDrop}
           onDragOver={handleCanvasDragOver}
+          onNodeDragStop={handleNodeDragStop}
           onNodeClick={(_, node) => {
             setSelectedNodeId(node.id);
+            setSelectedEdgeId(null);
             setConfigOpen(true);
+          }}
+          onEdgeClick={(_, edge) => {
+            setSelectedEdgeId(edge.id);
+            setConfigOpen(false);
+          }}
+          onEdgesDelete={() => {
+            setSelectedEdgeId(null);
+          }}
+          onPaneClick={() => {
+            setSelectedEdgeId(null);
           }}
           nodeTypes={nodeTypes}
           fitView
           fitViewOptions={{ padding: 0.32, maxZoom: 0.82 }}
           minZoom={0.45}
           maxZoom={1.35}
+          deleteKeyCode={["Delete", "Backspace"]}
           proOptions={{ hideAttribution: true }}
           nodesDraggable
           nodesConnectable
@@ -1484,21 +2095,23 @@ export default function TelegramFlowWorkbench() {
             </button>
           </div>
         </div>
+      </div>
 
-        <div className="pointer-events-auto rounded-[8px] border border-white/10 bg-[#151516]/92 px-4 py-3 shadow-[0_20px_70px_rgba(0,0,0,0.35)] backdrop-blur-xl">
-          <div className="grid grid-cols-9 gap-3 text-left">
-            <MiniStat label="State" value={workflowStateLabel} valueClassName={workflowStateClass} />
-            <MiniStat label="Bot" value={botName} />
-            <MiniStat label="Username" value={botUser} />
-            <MiniStat label="Groups" value={formatNumber(snapshot?.groups.length ?? 0)} />
-            <MiniStat label="Topics" value={formatNumber(snapshot?.topics.length ?? 0)} />
-            <MiniStat label="Nodes" value={formatNumber(nodeConfigs.length)} />
-            <MiniStat label="Pending" value={formatNumber(pendingCount)} />
-            <MiniStat label="Handled" value={formatNumber(runtimeHandled)} />
-            <MiniStat label="Ignored" value={formatNumber(runtimeIgnored)} />
+      {selectedEdge ? (
+        <div className="pointer-events-none absolute right-6 top-6 z-30">
+          <div className="pointer-events-auto rounded-[8px] border border-sky-400/20 bg-[#151516]/94 px-3 py-2 shadow-[0_20px_70px_rgba(0,0,0,0.35)] backdrop-blur-xl">
+            <div className="text-[10px] uppercase tracking-[0.22em] text-white/35">Line</div>
+            <div className="mt-1 max-w-[220px] truncate text-[12px] text-white/78">{selectedEdgeLabel}</div>
+            <button
+              type="button"
+              onClick={removeSelectedEdge}
+              className="mt-2 h-8 rounded-[6px] border border-rose-400/25 bg-rose-400/12 px-3 text-[11px] font-medium text-rose-100 transition hover:bg-rose-400/18"
+            >
+              Delete line
+            </button>
           </div>
         </div>
-      </div>
+      ) : null}
 
       {settingsOpen ? (
         <div className="pointer-events-auto absolute left-6 top-[108px] z-30 w-[360px] rounded-[8px] border border-white/10 bg-[#151516]/96 p-4 shadow-[0_24px_80px_rgba(0,0,0,0.42)] backdrop-blur-xl">
@@ -1510,9 +2123,11 @@ export default function TelegramFlowWorkbench() {
             <button
               type="button"
               onClick={() => setSettingsOpen(false)}
-              className="h-8 rounded-[6px] border border-white/10 bg-white/5 px-3 text-[11px] text-white/75 transition hover:bg-white/10"
+              aria-label="Đóng"
+              title="Đóng"
+              className="flex h-8 w-8 items-center justify-center rounded-[6px] border border-white/10 bg-white/5 text-white/70 transition hover:bg-white/10 hover:text-white"
             >
-              Close
+              <XMarkIcon aria-hidden="true" className="h-4 w-4" />
             </button>
           </div>
 
@@ -1531,10 +2146,10 @@ export default function TelegramFlowWorkbench() {
               <button
                 type="button"
                 onClick={() => void fetchWorkflow()}
-                disabled={isFetching || !workflowActive}
+                disabled={isFetching || workflowActive}
                 className="h-10 rounded-[6px] bg-sky-400 px-3 text-[12px] font-medium text-slate-950 transition hover:bg-sky-300 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {!workflowActive ? "Stopped" : isFetching ? "Scanning" : "Scan now"}
+                {workflowActive ? "Running" : isFetching ? "Scanning" : "Scan now"}
               </button>
               <button
                 type="button"
@@ -1547,9 +2162,23 @@ export default function TelegramFlowWorkbench() {
             </div>
 
             <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => void probeInventory()}
+                disabled={probeBusy || workflowActive}
+                className="h-10 rounded-[6px] border border-white/10 bg-white/5 px-3 text-[12px] font-medium text-white transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {probeBusy ? "Probing" : workflowActive ? "Stop to probe" : "Probe inventory"}
+              </button>
+              <div className="rounded-[6px] border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] leading-5 text-white/48">
+                Gửi thử rồi xoá ngay để ghi nhớ group thực tế.
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
               <ToggleButton
                 active={autoPoll}
-                disabled={!workflowActive}
+                disabled={workflowActive}
                 label="Auto scan"
                 onClick={() => setAutoPoll((value) => !value)}
               />
@@ -1559,7 +2188,7 @@ export default function TelegramFlowWorkbench() {
             <div className="grid grid-cols-3 gap-2">
               <MetaBox label="State" value={workflowStateLabel} valueClassName={workflowStateClass} />
               <MetaBox label="Webhook" value={snapshot?.webhook.url ? "On" : "Off"} />
-              <MetaBox label="Mode" value={snapshot?.meta.deepScan ? "Deep" : "Preview"} />
+              <MetaBox label="Inventory" value={`${formatNumber(inventoryGroupCount)} / ${formatNumber(inventoryTopicCount)}`} />
             </div>
             <div className="grid grid-cols-3 gap-2">
               <MetaBox label="Handled" value={formatNumber(runtimeHandled)} />
@@ -1594,9 +2223,11 @@ export default function TelegramFlowWorkbench() {
             <button
               type="button"
               onClick={() => setPaletteOpen(false)}
-              className="h-8 rounded-[6px] border border-white/10 bg-white/5 px-3 text-[11px] text-white/75 transition hover:bg-white/10"
+              aria-label="Đóng"
+              title="Đóng"
+              className="flex h-8 w-8 items-center justify-center rounded-[6px] border border-white/10 bg-white/5 text-white/70 transition hover:bg-white/10 hover:text-white"
             >
-              Close
+              <XMarkIcon aria-hidden="true" className="h-4 w-4" />
             </button>
           </div>
           <div className="mt-3 space-y-2">
@@ -1623,120 +2254,54 @@ export default function TelegramFlowWorkbench() {
       {configOpen ? (
         <div className="pointer-events-none absolute right-6 bottom-6 z-20 w-[380px] max-w-[calc(100vw-3rem)]">
           <div className="pointer-events-auto rounded-[8px] border border-white/10 bg-[#151516]/94 p-4 shadow-[0_24px_80px_rgba(0,0,0,0.42)] backdrop-blur-xl">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div className="text-[10px] uppercase tracking-[0.28em] text-white/35">Node config</div>
-              <div className="mt-2 truncate text-sm font-medium text-white">{selectedConfig?.name}</div>
-              <div className="mt-1 truncate text-[12px] leading-5 text-white/50">{selectedConfig?.n8nType}</div>
-            </div>
-            <div className="flex shrink-0 gap-2">
-              <button
-                type="button"
-                onClick={() => void copyText(exportJson, "Đã copy workflow JSON")}
-                className="h-8 rounded-[6px] border border-white/10 bg-white/5 px-3 text-[11px] text-white/75 transition hover:bg-white/10"
-              >
-                Copy JSON
-              </button>
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-[10px] uppercase tracking-[0.28em] text-white/35">Thiết lập</div>
+                <div className="mt-2 truncate text-sm font-medium text-white">
+                  {selectedConfig ? getNodeDisplayName(selectedConfig.name) : "Node"}
+                </div>
+                {selectedConfig ? (
+                  <div className="mt-1 text-[12px] leading-5 text-white/48">{getNodeSetupSummary(selectedConfig.name)}</div>
+                ) : null}
+              </div>
               <button
                 type="button"
                 onClick={() => setConfigOpen(false)}
-                className="h-8 rounded-[6px] border border-white/10 bg-white/5 px-3 text-[11px] text-white/75 transition hover:bg-white/10"
+                aria-label="Đóng"
+                title="Đóng"
+                className="flex h-8 w-8 items-center justify-center rounded-[6px] border border-white/10 bg-white/5 text-white/70 transition hover:bg-white/10 hover:text-white"
               >
-                Close
+                <XMarkIcon aria-hidden="true" className="h-4 w-4" />
               </button>
             </div>
-          </div>
 
-          {selectedConfig ? (
-            <div className="mt-4 space-y-3">
-              <label className="block">
-                <span className="text-[10px] uppercase tracking-[0.22em] text-white/35">Name</span>
-                <input
-                  value={selectedConfig.name}
-                  onChange={(event) => updateSelectedConfig({ name: event.target.value })}
-                  className="mt-1 h-9 w-full rounded-[6px] border border-white/10 bg-white/5 px-3 text-[12px] text-white outline-none focus:border-sky-400/40"
-                />
-              </label>
-
-              <div className="grid grid-cols-[1fr_96px] gap-2">
-                <label className="block min-w-0">
-                  <span className="text-[10px] uppercase tracking-[0.22em] text-white/35">Type</span>
-                  <input
-                    value={selectedConfig.n8nType}
-                    onChange={(event) => updateSelectedConfig({ n8nType: event.target.value })}
-                    className="mt-1 h-9 w-full rounded-[6px] border border-white/10 bg-white/5 px-3 text-[12px] text-white outline-none focus:border-sky-400/40"
+            {selectedConfig ? (
+              <div className="mt-4 space-y-3">
+                {selectedConfig.name === "Allowed Group Topic" ? (
+                  <AllowedTopicPicker
+                    topics={availableTopics}
+                    selectedTopics={selectedAllowedTopics}
+                    selectedCount={selectedAllowedTopics.length}
+                    hasSnapshot={Boolean(snapshot)}
+                    onChange={setAllowedTopicsForSelectedNode}
+                    onSelectAll={() => setAllowedTopicsForSelectedNode(availableTopics)}
+                    onClear={() => setAllowedTopicsForSelectedNode([])}
                   />
-                </label>
-                <label className="block">
-                  <span className="text-[10px] uppercase tracking-[0.22em] text-white/35">Version</span>
-                  <input
-                    type="number"
-                    step="0.1"
-                    value={selectedConfig.typeVersion}
-                    onChange={(event) => updateSelectedConfig({ typeVersion: Number(event.target.value) })}
-                    className="mt-1 h-9 w-full rounded-[6px] border border-white/10 bg-white/5 px-3 text-[12px] text-white outline-none focus:border-sky-400/40"
+                ) : selectedConfig.name === "Forward Tin nhắn" || selectedConfig.name === "Từ chối tin nhắn" || selectedConfig.name === "Gửi tin nhắn xác nhận" ? (
+                  <TopicTargetPicker
+                    topics={availableTopics}
+                    value={getTopicSelection(selectedConfig.parameters)}
+                    hasSnapshot={Boolean(snapshot)}
+                    onChange={setTargetForSelectedNode}
+                    onClear={() => setTargetForSelectedNode(null)}
                   />
-                </label>
+                ) : (
+                  <div className="rounded-[6px] border border-white/10 bg-white/[0.03] px-3 py-3 text-[12px] leading-5 text-white/68">
+                    Node này đã được cấu hình sẵn. Chỉ cần bấm Start là chạy.
+                  </div>
+                )}
               </div>
-
-              <div className="grid grid-cols-2 gap-2">
-                <MetaBox label="Credential" value={Object.values(selectedConfig.credentials ?? {})[0]?.name ?? "None"} />
-                <MetaBox label="Webhook" value={selectedConfig.webhookId ?? "None"} />
-              </div>
-
-              <label className="block">
-                <span className="text-[10px] uppercase tracking-[0.22em] text-white/35">Parameters</span>
-                <textarea
-                  value={parameterDrafts[selectedConfig.id] ?? "{}"}
-                  onChange={(event) =>
-                    setParameterDrafts((current) => ({
-                      ...current,
-                      [selectedConfig.id]: event.target.value,
-                    }))
-                  }
-                  className="mt-1 h-48 w-full resize-none rounded-[6px] border border-white/10 bg-[#0d0d0e] p-3 font-mono text-[11px] leading-5 text-white/78 outline-none focus:border-sky-400/40"
-                  spellCheck={false}
-                />
-              </label>
-
-              {parameterError ? <div className="text-[11px] leading-5 text-rose-300">{parameterError}</div> : null}
-
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={applyParameters}
-                  className="h-9 rounded-[6px] bg-white px-3 text-[12px] font-medium text-black transition hover:bg-sky-100"
-                >
-                  Apply
-                </button>
-                <button
-                  type="button"
-                  onClick={resetParameters}
-                  className="h-9 rounded-[6px] border border-white/10 bg-white/5 px-3 text-[12px] font-medium text-white/75 transition hover:bg-white/10"
-                >
-                  Reset
-                </button>
-              </div>
-
-              <div className="rounded-[6px] border border-white/10 bg-white/[0.03] p-3">
-                <div className="text-[10px] uppercase tracking-[0.22em] text-white/35">Output</div>
-                <div className="mt-2 space-y-1">
-                  {selectedOutgoing.length === 0 ? (
-                    <div className="text-[12px] text-white/40">None</div>
-                  ) : (
-                    selectedOutgoing.map((connections, index) => (
-                      <div key={`${selectedConfig.id}-${index}`} className="flex items-center justify-between gap-3">
-                        <span className="text-[11px] text-white/42">{index === 0 ? "true/main" : "false"}</span>
-                        <span className="truncate text-[12px] text-white/75">
-                          {connections.map((connection) => connection.node).join(", ") || "None"}
-                        </span>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
-            </div>
-          ) : null}
+            ) : null}
           </div>
         </div>
       ) : null}
@@ -1749,37 +2314,6 @@ export default function TelegramFlowWorkbench() {
             {snapshot ? `${snapshot.meta.updateCount} update(s)` : selectedNode?.data.title ?? "waiting"}
           </div>
         </div>
-
-        {visibleExecution ? (
-          <div className="pointer-events-auto max-w-[520px] rounded-[8px] border border-white/10 bg-[#151516]/92 px-4 py-3 shadow-[0_20px_70px_rgba(0,0,0,0.35)] backdrop-blur-xl">
-            <div className="flex items-center justify-between gap-4">
-              <div className="min-w-0">
-                <div className="text-[10px] uppercase tracking-[0.24em] text-white/35">Live run</div>
-                <div className="mt-1 truncate text-sm font-medium text-white/85">
-                  #{visibleExecution.id} · {visibleExecution.title}
-                </div>
-              </div>
-              <div className={["shrink-0 text-[11px] font-medium uppercase tracking-[0.18em]", executionStatusClass].join(" ")}>
-                {visibleExecution.status}
-              </div>
-            </div>
-            <div className="mt-2 truncate text-[11px] text-white/45">{visibleExecution.summary}</div>
-            <div className="mt-2 flex max-w-full gap-1.5 overflow-hidden">
-              {visibleExecution.steps.slice(-6).map((step) => (
-                <span
-                  key={`${visibleExecution.id}-${step.nodeName}`}
-                  className={[
-                    "max-w-[110px] truncate rounded-full border px-2 py-1 text-[10px]",
-                    executionChipClass(step.status),
-                  ].join(" ")}
-                  title={step.note}
-                >
-                  {step.nodeName}
-                </span>
-              ))}
-            </div>
-          </div>
-        ) : null}
       </div>
 
       {toast ? (
@@ -1788,15 +2322,6 @@ export default function TelegramFlowWorkbench() {
         </div>
       ) : null}
     </main>
-  );
-}
-
-function MiniStat({ label, value, valueClassName = "text-white/80" }: { label: string; value: string; valueClassName?: string }) {
-  return (
-    <div>
-      <div className="text-[10px] uppercase tracking-[0.22em] text-white/35">{label}</div>
-      <div className={["mt-1 max-w-[120px] truncate text-[12px]", valueClassName].join(" ")}>{value}</div>
-    </div>
   );
 }
 
@@ -1809,20 +2334,302 @@ function MetaBox({ label, value, valueClassName = "text-white/75" }: { label: st
   );
 }
 
-function executionChipClass(status: ExecutionState) {
-  if (status === "running") {
-    return "border-sky-300/35 bg-sky-400/12 text-sky-100";
+function AllowedTopicPicker({
+  topics,
+  selectedTopics,
+  selectedCount,
+  hasSnapshot,
+  onChange,
+  onSelectAll,
+  onClear,
+}: {
+  topics: AllowedTopicSelection[];
+  selectedTopics: AllowedTopicSelection[];
+  selectedCount: number;
+  hasSnapshot: boolean;
+  onChange: (topics: AllowedTopicSelection[]) => void;
+  onSelectAll: () => void;
+  onClear: () => void;
+}) {
+  const selectedKeys = new Set(selectedTopics.map(topicKey));
+  const groups = groupTopics(topics);
+
+  function toggleTopic(topic: AllowedTopicSelection) {
+    const key = topicKey(topic);
+    const exists = selectedKeys.has(key);
+    onChange(exists ? selectedTopics.filter((item) => topicKey(item) !== key) : [...selectedTopics, topic]);
   }
 
-  if (status === "success") {
-    return "border-emerald-300/30 bg-emerald-400/10 text-emerald-100";
+  function toggleGroup(groupTopicsList: AllowedTopicSelection[]) {
+    const groupKeys = new Set(groupTopicsList.map(topicKey));
+    const allSelected = groupTopicsList.every((topic) => selectedKeys.has(topicKey(topic)));
+
+    if (allSelected) {
+      onChange(selectedTopics.filter((topic) => !groupKeys.has(topicKey(topic))));
+      return;
+    }
+
+    const next = [...selectedTopics];
+    for (const topic of groupTopicsList) {
+      if (!selectedKeys.has(topicKey(topic))) {
+        next.push(topic);
+      }
+    }
+    onChange(next);
   }
 
-  if (status === "skipped") {
-    return "border-amber-300/30 bg-amber-400/10 text-amber-100";
+  return (
+    <div className="rounded-[6px] border border-white/10 bg-white/[0.03] p-3">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-[10px] uppercase tracking-[0.22em] text-white/35">Group chat / topic</div>
+          <div className="mt-1 text-[12px] text-white/72">{formatNumber(selectedCount)} topic chọn</div>
+        </div>
+        <div className="flex gap-1.5">
+          <button
+            type="button"
+            onClick={onSelectAll}
+            className="h-8 rounded-[6px] border border-white/10 bg-white/5 px-2.5 text-[11px] text-white/75 transition hover:bg-white/10"
+          >
+            All
+          </button>
+          <button
+            type="button"
+            onClick={onClear}
+            className="h-8 rounded-[6px] border border-white/10 bg-white/5 px-2.5 text-[11px] text-white/75 transition hover:bg-white/10"
+          >
+            Clear
+          </button>
+        </div>
+      </div>
+
+      {!hasSnapshot ? (
+        <div className="mt-3 rounded-[6px] border border-amber-300/15 bg-amber-300/8 px-3 py-2 text-[11px] leading-5 text-amber-100/80">
+          Scan bot để lấy group/topic hiện có.
+        </div>
+      ) : null}
+
+      <div className="mt-3 max-h-72 space-y-2 overflow-auto">
+        {groups.length === 0 ? (
+          <div className="rounded-[6px] border border-white/10 bg-white/[0.03] px-3 py-3 text-[12px] text-white/45">
+            Chưa có group/topic.
+          </div>
+        ) : null}
+
+        {groups.map((group) => {
+          const groupSelectedCount = group.topics.filter((topic) => selectedKeys.has(topicKey(topic))).length;
+          const allSelected = groupSelectedCount === group.topics.length && group.topics.length > 0;
+
+          return (
+            <div key={group.chatId} className="overflow-hidden rounded-[6px] border border-white/10 bg-[#101113]">
+              <button
+                type="button"
+                onClick={() => toggleGroup(group.topics)}
+                className={[
+                  "flex w-full items-center justify-between gap-3 px-3 py-2 text-left transition",
+                  allSelected ? "bg-emerald-400/10" : "bg-white/[0.035] hover:bg-white/[0.06]",
+                ].join(" ")}
+              >
+                <span className="min-w-0">
+                  <span className="block truncate text-[12px] font-medium text-white/86">{group.chatTitle}</span>
+                  <span className="block text-[10px] text-white/36">
+                    {formatNumber(groupSelectedCount)}/{formatNumber(group.topics.length)}
+                  </span>
+                </span>
+                <span
+                  className={[
+                    "flex h-4 w-4 shrink-0 items-center justify-center rounded border text-[10px]",
+                    allSelected ? "border-emerald-300/60 bg-emerald-300 text-slate-950" : "border-white/20 bg-white/5 text-transparent",
+                  ].join(" ")}
+                >
+                  ✓
+                </span>
+              </button>
+
+              <div>
+                {group.topics.map((topic) => {
+                  const key = topicKey(topic);
+                  const checked = selectedKeys.has(key);
+
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => toggleTopic(topic)}
+                      title={topic.threadId === null ? topic.topicName : formatTopicDisplayName(topic.topicName)}
+                      className={[
+                        "grid w-full grid-cols-[20px_1fr] items-center gap-2 border-t border-white/7 px-3 py-2 text-left transition",
+                        checked ? "bg-emerald-400/8" : "hover:bg-white/[0.035]",
+                      ].join(" ")}
+                    >
+                      <span
+                        className={[
+                          "flex h-4 w-4 items-center justify-center rounded border text-[10px]",
+                          checked ? "border-emerald-300/60 bg-emerald-300 text-slate-950" : "border-white/20 bg-white/5 text-transparent",
+                        ].join(" ")}
+                      >
+                        ✓
+                      </span>
+                      <span className="min-w-0 truncate text-[12px] text-white/76">{formatTopicDisplayName(topic.topicName)}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function TopicTargetPicker({
+  topics,
+  value,
+  hasSnapshot,
+  onChange,
+  onClear,
+}: {
+  topics: AllowedTopicSelection[];
+  value: AllowedTopicSelection | null;
+  hasSnapshot: boolean;
+  onChange: (topic: AllowedTopicSelection) => void;
+  onClear: () => void;
+}) {
+  const selectedKey = value ? topicKey(value) : null;
+  const groups = buildTopicPickerGroups(topics);
+
+  function chooseTopic(topic: AllowedTopicSelection) {
+    const key = topicKey(topic);
+    if (selectedKey === key) {
+      onClear();
+      return;
+    }
+    onChange(topic);
   }
 
-  return "border-rose-300/35 bg-rose-400/12 text-rose-100";
+  return (
+    <div className="rounded-[6px] border border-white/10 bg-white/[0.03] p-3">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-[10px] uppercase tracking-[0.22em] text-white/35">Group chat / topic</div>
+          <div className="mt-1 text-[12px] text-white/72">{formatTopicSelectionLabel(value)}</div>
+        </div>
+        <button
+          type="button"
+          onClick={onClear}
+          className="h-8 rounded-[6px] border border-white/10 bg-white/5 px-2.5 text-[11px] text-white/75 transition hover:bg-white/10"
+        >
+          Clear
+        </button>
+      </div>
+
+      {!hasSnapshot ? (
+        <div className="mt-3 rounded-[6px] border border-amber-300/15 bg-amber-300/8 px-3 py-2 text-[11px] leading-5 text-amber-100/80">
+          Scan bot để lấy group/topic hiện có.
+        </div>
+      ) : null}
+
+      <div className="mt-3 max-h-72 space-y-2 overflow-auto">
+        {groups.length === 0 ? (
+          <div className="rounded-[6px] border border-white/10 bg-white/[0.03] px-3 py-3 text-[12px] text-white/45">
+            Chưa có group/topic.
+          </div>
+        ) : null}
+
+        {groups.map((group) => {
+          const groupKey = topicKey(group.group);
+          const groupSelected = selectedKey === groupKey;
+
+          return (
+            <div key={group.chatId} className="overflow-hidden rounded-[6px] border border-white/10 bg-[#101113]">
+              <button
+                type="button"
+                onClick={() => chooseTopic(group.group)}
+                className={[
+                  "flex w-full items-center justify-between gap-3 px-3 py-2 text-left transition",
+                  groupSelected ? "bg-sky-400/10" : "bg-white/[0.035] hover:bg-white/[0.06]",
+                ].join(" ")}
+              >
+                <span className="min-w-0">
+                  <span className="block truncate text-[12px] font-medium text-white/86">{group.chatTitle}</span>
+                  <span className="block text-[10px] text-white/36">All messages</span>
+                </span>
+                <span
+                  className={[
+                    "flex h-4 w-4 shrink-0 items-center justify-center rounded border text-[10px]",
+                    groupSelected
+                      ? "border-sky-300/60 bg-sky-300 text-slate-950"
+                      : "border-white/20 bg-white/5 text-transparent",
+                  ].join(" ")}
+                >
+                  ✓
+                </span>
+              </button>
+
+              <div>
+                {group.topics.map((topic) => {
+                  const key = topicKey(topic);
+                  const checked = selectedKey === key;
+
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => chooseTopic(topic)}
+                      className={[
+                        "grid w-full grid-cols-[20px_1fr] items-center gap-2 border-t border-white/7 px-3 py-2 text-left transition",
+                        checked ? "bg-sky-400/8" : "hover:bg-white/[0.035]",
+                      ].join(" ")}
+                    >
+                      <span
+                        className={[
+                          "flex h-4 w-4 items-center justify-center rounded border text-[10px]",
+                          checked
+                            ? "border-sky-300/60 bg-sky-300 text-slate-950"
+                            : "border-white/20 bg-white/5 text-transparent",
+                        ].join(" ")}
+                      >
+                        ✓
+                      </span>
+                      <span className="min-w-0 truncate text-[12px] text-white/76">{formatTopicDisplayName(topic.topicName)}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function groupTopics(topics: AllowedTopicSelection[]) {
+  const groups = new Map<number, { chatId: number; chatTitle: string; topics: AllowedTopicSelection[] }>();
+
+  for (const topic of topics) {
+    const existing = groups.get(topic.chatId);
+    if (existing) {
+      existing.topics.push(topic);
+      continue;
+    }
+
+    groups.set(topic.chatId, {
+      chatId: topic.chatId,
+      chatTitle: topic.chatTitle,
+      topics: [topic],
+    });
+  }
+
+  return Array.from(groups.values()).map((group) => ({
+    ...group,
+    topics: group.topics.sort((first, second) => {
+      if (first.threadId === null) return -1;
+      if (second.threadId === null) return 1;
+      return first.topicName.localeCompare(second.topicName);
+    }),
+  }));
 }
 
 function ToggleButton({
@@ -1855,4 +2662,15 @@ function ToggleButton({
       />
     </button>
   );
+}
+
+function getCleanErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error) {
+    const msg = error.message;
+    if (msg === "Failed to fetch" || msg.includes("fetch failed")) {
+      return "Không thể kết nối đến server (Failed to fetch). Vui lòng đảm bảo server đang chạy.";
+    }
+    return msg;
+  }
+  return fallback;
 }

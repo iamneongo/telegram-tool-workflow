@@ -1,7 +1,12 @@
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import { mirrorWorkspaceInventory } from "@/lib/workspace-store";
 import {
   deleteTelegramWebhook,
   fetchUpdatesBatch,
   telegramRequest,
+  type TelegramChat,
+  type TelegramWorkflowSnapshot,
   type TelegramMessage,
   type TelegramUpdate,
 } from "@/lib/telegram";
@@ -33,11 +38,33 @@ type RuntimeExecution = {
   steps: RuntimeExecutionStep[];
 };
 
+export type AllowedTopicConfig = {
+  chatId: number;
+  threadId: number | null;
+  chatTitle?: string;
+  topicName?: string;
+};
+
+type WorkflowInventory = {
+  groups: { chatId: number; chatTitle: string; chatType: string }[];
+  topics: { chatId: number; threadId: number; chatTitle: string; topicName: string }[];
+  updatedAt: string | null;
+};
+
+type ProbeTarget = {
+  chatId: number;
+  chatTitle: string;
+  chatType: string;
+  threadId: number | null;
+  topicName?: string;
+};
+
 type LocalWorkflowRuntime = {
   active: boolean;
   token: string;
   timer: ReturnType<typeof setInterval> | null;
   polling: boolean;
+  allowedTopics: AllowedTopicConfig[];
   offset?: number;
   pollMs: number;
   startedAt: string | null;
@@ -47,9 +74,12 @@ type LocalWorkflowRuntime = {
   handledCount: number;
   ignoredCount: number;
   logs: RuntimeLog[];
+  inventory: WorkflowInventory;
   executionSeq: number;
   currentExecution: RuntimeExecution | null;
   lastExecution: RuntimeExecution | null;
+  approvalTarget?: AllowedTopicConfig;
+  forwardTarget?: AllowedTopicConfig;
 };
 
 export type LocalWorkflowStatus = Omit<LocalWorkflowRuntime, "timer" | "token"> & {
@@ -58,13 +88,12 @@ export type LocalWorkflowStatus = Omit<LocalWorkflowRuntime, "timer" | "token"> 
 
 type StartOptions = {
   token: string;
+  allowedTopics?: AllowedTopicConfig[];
+  approvalTarget?: AllowedTopicConfig;
+  forwardTarget?: AllowedTopicConfig;
 };
 
-const allowedTopics = [
-  { chatId: -1004312722594, threadId: 4 },
-  { chatId: -1004312722594, threadId: 6 },
-  { chatId: -1004312722594, threadId: 23 },
-];
+const defaultAllowedTopics: AllowedTopicConfig[] = [];
 
 const nodeNames = {
   trigger: "Telegram Trigger",
@@ -83,6 +112,7 @@ const nodeNames = {
 const approvalChatId = -1004312722594;
 const approvalThreadId = 23;
 const forwardDestinationChatId = -5333921701;
+const inventoryPath = path.join(process.cwd(), ".telegram-workflow-inventory.json");
 
 const runtime = getRuntime();
 
@@ -97,6 +127,7 @@ function getRuntime(): LocalWorkflowRuntime {
       token: "",
       timer: null,
       polling: false,
+      allowedTopics: defaultAllowedTopics,
       pollMs: 2000,
       startedAt: null,
       stoppedAt: null,
@@ -105,13 +136,78 @@ function getRuntime(): LocalWorkflowRuntime {
       handledCount: 0,
       ignoredCount: 0,
       logs: [],
+      inventory: readInventory(),
       executionSeq: 0,
       currentExecution: null,
       lastExecution: null,
     };
   }
 
+  if (!globalScope.__telegramLocalWorkflowRuntime.inventory) {
+    globalScope.__telegramLocalWorkflowRuntime.inventory = readInventory();
+  }
+
   return globalScope.__telegramLocalWorkflowRuntime;
+}
+
+function emptyInventory(): WorkflowInventory {
+  return {
+    groups: [],
+    topics: [],
+    updatedAt: null,
+  };
+}
+
+function readInventory(): WorkflowInventory {
+  try {
+    if (!existsSync(inventoryPath)) {
+      return emptyInventory();
+    }
+
+    const parsed = JSON.parse(readFileSync(inventoryPath, "utf8")) as Partial<WorkflowInventory>;
+    return {
+      groups: Array.isArray(parsed.groups) ? parsed.groups : [],
+      topics: Array.isArray(parsed.topics) ? parsed.topics : [],
+      updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : null,
+    };
+  } catch {
+    return emptyInventory();
+  }
+}
+
+function writeInventory() {
+  try {
+    writeFileSync(inventoryPath, JSON.stringify(runtime.inventory, null, 2));
+  } catch {
+    // Inventory is a local convenience cache; workflow processing should not fail if disk write fails.
+  }
+
+  mirrorWorkspaceInventory(runtime.inventory);
+}
+
+function uniqueProbeTargets() {
+  const targets = new Map<string, ProbeTarget>();
+
+  for (const group of runtime.inventory.groups) {
+    targets.set(`${group.chatId}:group`, {
+      chatId: group.chatId,
+      chatTitle: group.chatTitle,
+      chatType: group.chatType,
+      threadId: null,
+    });
+  }
+
+  for (const topic of runtime.inventory.topics) {
+    targets.set(`${topic.chatId}:${topic.threadId}`, {
+      chatId: topic.chatId,
+      chatTitle: topic.chatTitle,
+      chatType: "supergroup",
+      threadId: topic.threadId,
+      topicName: topic.topicName,
+    });
+  }
+
+  return Array.from(targets.values());
 }
 
 function addLog(level: RuntimeLog["level"], message: string, updateId?: number) {
@@ -126,6 +222,186 @@ function addLog(level: RuntimeLog["level"], message: string, updateId?: number) 
   ].slice(0, 80);
 }
 
+function chatDisplayName(message: TelegramMessage) {
+  return (
+    message.chat.title?.trim() ||
+    message.chat.username?.trim() ||
+    [message.chat.first_name, message.chat.last_name].filter(Boolean).join(" ").trim() ||
+    `Chat ${message.chat.id}`
+  );
+}
+
+function topicDisplayName(message: TelegramMessage, threadId: number) {
+  return (
+    message.forum_topic_created?.name?.trim() ||
+    message.forum_topic_edited?.name?.trim() ||
+    `Topic ${threadId}`
+  );
+}
+
+function upsertInventoryGroup(chatId: number, chatTitle: string, chatType: string) {
+  const existingIndex = runtime.inventory.groups.findIndex((group) => group.chatId === chatId);
+  const nextGroup = { chatId, chatTitle, chatType };
+
+  if (existingIndex >= 0) {
+    runtime.inventory.groups = runtime.inventory.groups.map((group, index) =>
+      index === existingIndex ? { ...group, ...nextGroup } : group,
+    );
+    return;
+  }
+
+  runtime.inventory.groups = [...runtime.inventory.groups, nextGroup];
+}
+
+function upsertInventoryTopic(chatId: number, threadId: number, chatTitle: string, topicName: string) {
+  const existingIndex = runtime.inventory.topics.findIndex(
+    (topic) => topic.chatId === chatId && topic.threadId === threadId,
+  );
+  const nextTopic = { chatId, threadId, chatTitle, topicName };
+
+  if (existingIndex >= 0) {
+    runtime.inventory.topics = runtime.inventory.topics.map((topic, index) =>
+      index === existingIndex ? { ...topic, ...nextTopic } : topic,
+    );
+    return;
+  }
+
+  runtime.inventory.topics = [...runtime.inventory.topics, nextTopic];
+}
+
+function recordMessageInventory(message: TelegramMessage | undefined) {
+  if (!message?.chat) return;
+
+  const chatId = Number(message.chat.id);
+  if (!Number.isFinite(chatId)) return;
+
+  const chatTitle = chatDisplayName(message);
+  upsertInventoryGroup(chatId, chatTitle, message.chat.type);
+
+  if (message.message_thread_id !== undefined) {
+    const threadId = Number(message.message_thread_id);
+    if (Number.isFinite(threadId)) {
+      upsertInventoryTopic(chatId, threadId, chatTitle, topicDisplayName(message, threadId));
+    }
+  }
+
+  runtime.inventory.updatedAt = new Date().toISOString();
+  writeInventory();
+}
+
+function recordChatInventory(chat: TelegramChat | undefined) {
+  if (!chat) return;
+
+  const chatId = Number(chat.id);
+  if (!Number.isFinite(chatId)) return;
+
+  const chatTitle =
+    chat.title?.trim() ||
+    chat.username?.trim() ||
+    [chat.first_name, chat.last_name].filter(Boolean).join(" ").trim() ||
+    `Chat ${chatId}`;
+  upsertInventoryGroup(chatId, chatTitle, chat.type);
+  runtime.inventory.updatedAt = new Date().toISOString();
+  writeInventory();
+}
+
+async function probeTarget(token: string, target: ProbeTarget) {
+  const message = await telegramRequest<TelegramMessage>(token, "sendMessage", {
+    chat_id: target.chatId,
+    message_thread_id: target.threadId === null ? undefined : target.threadId,
+    text: "·",
+    disable_notification: true,
+  });
+
+  recordMessageInventory(message);
+
+  await telegramRequest<{ ok: boolean }>(token, "deleteMessage", {
+    chat_id: target.chatId,
+    message_id: message.message_id,
+  });
+}
+
+export async function probeWorkflowInventory(options: { token: string }) {
+  const token = options.token.trim();
+  if (!token) {
+    throw new Error("Thiếu bot token.");
+  }
+
+  if (runtime.active) {
+    throw new Error("Hãy stop workflow trước khi probe, để tránh xung đột getUpdates.");
+  }
+
+  const targets = uniqueProbeTargets();
+  if (targets.length === 0) {
+    throw new Error("Chưa có group/topic nào trong inventory để probe.");
+  }
+
+  const report = {
+    probedGroups: 0,
+    probedTopics: 0,
+    failedTargets: [] as string[],
+  };
+
+  addLog("info", `Probing ${targets.length} inventory target(s).`);
+
+  for (const target of targets) {
+    try {
+      await probeTarget(token, target);
+      if (target.threadId === null) {
+        report.probedGroups += 1;
+      } else {
+        report.probedTopics += 1;
+      }
+      addLog(
+        "info",
+        target.threadId === null
+          ? `Probed group ${target.chatTitle}.`
+          : `Probed topic ${target.topicName || target.threadId} in ${target.chatTitle}.`,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Không probe được target.";
+      report.failedTargets.push(target.threadId === null ? target.chatTitle : `${target.chatTitle} / ${target.topicName || target.threadId}`);
+      addLog("warn", message);
+    }
+  }
+
+  runtime.inventory.updatedAt = new Date().toISOString();
+  writeInventory();
+
+  return {
+    ...report,
+    status: getLocalWorkflowStatus(),
+  };
+}
+
+function recordUpdateInventory(update: TelegramUpdate) {
+  recordMessageInventory(update.message);
+  recordMessageInventory(update.edited_message);
+  recordMessageInventory(update.channel_post);
+  recordMessageInventory(update.edited_channel_post);
+  recordMessageInventory(update.callback_query?.message);
+  recordChatInventory(update.my_chat_member?.chat);
+  recordChatInventory(update.chat_member?.chat);
+  recordChatInventory(update.chat_join_request?.chat);
+}
+
+export function recordWorkflowSnapshotInventory(snapshot: TelegramWorkflowSnapshot) {
+  for (const group of snapshot.groups) {
+    upsertInventoryGroup(group.chatId, group.chatTitle, group.chatType);
+  }
+
+  for (const topic of snapshot.topics) {
+    upsertInventoryTopic(topic.chatId, topic.threadId, topic.chatTitle, topic.topicName);
+  }
+
+  if (snapshot.groups.length > 0 || snapshot.topics.length > 0) {
+    runtime.inventory.updatedAt = new Date().toISOString();
+    writeInventory();
+  }
+
+  return runtime.inventory;
+}
+
 function getMessageFromCallback(update: TelegramUpdate) {
   return update.callback_query?.message;
 }
@@ -133,9 +409,9 @@ function getMessageFromCallback(update: TelegramUpdate) {
 function isAllowedMessage(message: TelegramMessage | undefined) {
   if (!message) return false;
   const chatId = Number(message.chat.id);
-  const threadId = Number(message.message_thread_id);
+  const threadId = message.message_thread_id === undefined ? null : Number(message.message_thread_id);
 
-  return allowedTopics.some((item) => item.chatId === chatId && item.threadId === threadId);
+  return runtime.allowedTopics.some((item) => item.chatId === chatId && (item.threadId === null || item.threadId === threadId));
 }
 
 function parseCallbackData(data: string | undefined) {
@@ -232,13 +508,45 @@ function finishExecution(status: RuntimeExecution["status"], summary: string) {
   runtime.currentExecution = null;
 }
 
+function normalizeAllowedTopics(topics: AllowedTopicConfig[] | undefined) {
+  const source = Array.isArray(topics) ? topics : defaultAllowedTopics;
+  const seen = new Set<string>();
+  const normalized: AllowedTopicConfig[] = [];
+
+  for (const topic of source) {
+    const chatId = Number(topic.chatId);
+    const threadId = topic.threadId === null ? null : Number(topic.threadId);
+    if (!Number.isFinite(chatId) || (threadId !== null && !Number.isFinite(threadId))) {
+      continue;
+    }
+
+    const key = `${chatId}:${threadId ?? "all"}`;
+    if (seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    normalized.push({
+      chatId,
+      threadId,
+      chatTitle: topic.chatTitle,
+      topicName: topic.topicName,
+    });
+  }
+
+  return normalized;
+}
+
 async function sendApprovalRequest(update: TelegramUpdate) {
   const message = update.message;
   if (!message) return;
 
+  const chatId = runtime.approvalTarget?.chatId ?? approvalChatId;
+  const threadId = runtime.approvalTarget ? runtime.approvalTarget.threadId : approvalThreadId;
+
   await telegramRequest(runtime.token, "sendMessage", {
-    chat_id: approvalChatId,
-    message_thread_id: approvalThreadId,
+    chat_id: chatId,
+    message_thread_id: threadId === null ? undefined : threadId,
     text: message.text || message.caption || "(no text)",
     reply_markup: JSON.stringify({
       inline_keyboard: [
@@ -269,14 +577,16 @@ async function answerCallback(update: TelegramUpdate) {
   });
 }
 
-async function editCallbackMessage(update: TelegramUpdate, text: string) {
+async function editCallbackButtons(update: TelegramUpdate) {
   const message = getMessageFromCallback(update);
   if (!message) return;
 
-  await telegramRequest(runtime.token, "editMessageText", {
+  await telegramRequest(runtime.token, "editMessageReplyMarkup", {
     chat_id: message.chat.id,
     message_id: message.message_id,
-    text,
+    reply_markup: JSON.stringify({
+      inline_keyboard: [],
+    }),
   });
 }
 
@@ -293,10 +603,14 @@ async function processUpdate(update: TelegramUpdate) {
     markStep(nodeNames.approvalDecision, "success", parsed.action === "approve" ? "Nhánh duyệt." : "Nhánh từ chối.");
 
     if (parsed.action === "approve") {
-      await runStep(nodeNames.approve, () => editCallbackMessage(update, "Đã đồng ý"), "Edit message: đã đồng ý.");
+      const forwardChatId = runtime.forwardTarget?.chatId ?? forwardDestinationChatId;
+      const forwardThreadId = runtime.forwardTarget ? runtime.forwardTarget.threadId : null;
+
+      await runStep(nodeNames.approve, () => editCallbackButtons(update), "Ẩn nút đồng ý/không đồng ý.");
       await runStep(nodeNames.forward, () =>
         telegramRequest(runtime.token, "forwardMessage", {
-          chat_id: forwardDestinationChatId,
+          chat_id: forwardChatId,
+          message_thread_id: forwardThreadId === null ? undefined : forwardThreadId,
           from_chat_id: parsed.sourceChatId,
           message_id: parsed.messageId,
         }),
@@ -308,7 +622,7 @@ async function processUpdate(update: TelegramUpdate) {
     }
 
     if (parsed.action === "reject") {
-      await runStep(nodeNames.reject, () => editCallbackMessage(update, "Không đồng ý"), "Edit message: không đồng ý.");
+      await runStep(nodeNames.reject, () => editCallbackButtons(update), "Ẩn nút đồng ý/không đồng ý.");
       await runStep(nodeNames.rejectNotify, () =>
         telegramRequest(runtime.token, "sendMessage", {
           chat_id: parsed.sourceChatId,
@@ -355,6 +669,7 @@ async function pollOnce() {
     for (const update of updates) {
       runtime.offset = update.update_id + 1;
       runtime.lastUpdateAt = new Date().toISOString();
+      recordUpdateInventory(update);
 
       try {
         await processUpdate(update);
@@ -393,6 +708,9 @@ export async function startLocalWorkflow(options: StartOptions) {
   }
 
   runtime.token = token;
+  runtime.allowedTopics = normalizeAllowedTopics(options.allowedTopics);
+  runtime.approvalTarget = options.approvalTarget;
+  runtime.forwardTarget = options.forwardTarget;
   runtime.active = true;
   runtime.startedAt = new Date().toISOString();
   runtime.stoppedAt = null;
@@ -429,10 +747,14 @@ export function getLocalWorkflowStatus(): LocalWorkflowStatus {
     handledCount: runtime.handledCount,
     ignoredCount: runtime.ignoredCount,
     logs: runtime.logs,
+    inventory: runtime.inventory,
+    allowedTopics: runtime.allowedTopics,
     executionSeq: runtime.executionSeq,
     currentExecution: runtime.currentExecution,
     lastExecution: runtime.lastExecution,
     offset: runtime.offset,
     hasToken: Boolean(runtime.token),
+    approvalTarget: runtime.approvalTarget,
+    forwardTarget: runtime.forwardTarget,
   };
 }

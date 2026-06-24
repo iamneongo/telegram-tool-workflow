@@ -712,6 +712,47 @@ async function processUpdate(update: TelegramUpdate) {
         return;
       }
     }
+
+    // Handle replies to supplier confirmation prompt
+    const isSupplierReply = promptText.includes("xác nhận nhà cung ứng đã đến");
+    if (isSupplierReply) {
+      const user = update.message.from;
+      const userName = user ? ([user.first_name, user.last_name].filter(Boolean).join(" ") || user.username || `User ${user.id}`) : "Ai đó";
+      const replyText = update.message.text || update.message.caption || "";
+      const replyToId = update.message.reply_to_message.message_id;
+
+      // Retrieve source metadata to route reply back
+      let sourceChatId: number | null = null;
+      let sourceMessageId: number | null = null;
+      let sourceThreadId: number | null = null;
+      if (promptToMetaMap.has(replyToId)) {
+        const meta = promptToMetaMap.get(replyToId);
+        if (meta) {
+          sourceChatId = meta.chatId;
+          sourceMessageId = meta.messageId;
+          sourceThreadId = meta.threadId;
+        }
+      }
+
+      // Notify back to the original group
+      if (sourceChatId) {
+        const notifyText = `📦 <b>${userName}</b> xác nhận: "${replyText}"`;
+        addLog("info", `Routing supplier confirmation reply back to source group`, update.update_id);
+        await runStep("Gửi xác nhận nhà cung ứng về group gốc", () =>
+          telegramRequest(runtime.token, "sendMessage", {
+            chat_id: sourceChatId!,
+            message_thread_id: sourceThreadId === null ? undefined : sourceThreadId,
+            text: notifyText,
+            parse_mode: "HTML",
+            reply_to_message_id: sourceMessageId || undefined,
+          })
+        );
+      }
+
+      runtime.handledCount += 1;
+      finishExecution("success", `Đã xác nhận nhà cung ứng.`);
+      return;
+    }
   }
 
   if (update.callback_query) {
@@ -803,6 +844,46 @@ async function processUpdate(update: TelegramUpdate) {
           );
           if (sentMsg && sentMsg.message_id) {
             promptToRequestMap.set(sentMsg.message_id, newText);
+            promptToMetaMap.set(sentMsg.message_id, {
+              chatId: parsed.sourceChatId,
+              messageId: parsed.messageId,
+              threadId: cbQuery.message?.message_thread_id ?? null,
+            });
+          }
+        }
+
+        if (parsed.action === "vt_co") {
+          // After confirming supply, send a force_reply message to the "Xác nhận nhà cung ứng" node target
+          let supplierTarget: AllowedTopicConfig | undefined;
+          if (runtime.forwardTargets) {
+            const matchedNode = runtime.forwardTargets.find((ft) => ft.nodeName.startsWith("Xác nhận nhà cung ứng"));
+            if (matchedNode) {
+              supplierTarget = matchedNode.target;
+            }
+          }
+
+          if (supplierTarget) {
+            addLog("info", `Sending supplier confirmation prompt to: Xác nhận nhà cung ứng group`, update.update_id);
+            const sentMsg = await runStep("Gửi yêu cầu xác nhận nhà cung ứng", () =>
+              telegramRequest<TelegramMessage>(runtime.token, "sendMessage", {
+                chat_id: supplierTarget!.chatId,
+                message_thread_id: supplierTarget!.threadId === null ? undefined : supplierTarget!.threadId,
+                text: `📦 ${newText}\n\nVui lòng reply tin nhắn này để xác nhận nhà cung ứng đã đến.`,
+                parse_mode: "HTML",
+                reply_markup: JSON.stringify({
+                  force_reply: true,
+                  selective: false,
+                }),
+              })
+            );
+            if (sentMsg && sentMsg.message_id) {
+              // Cache meta so we can route the reply back to the original group
+              promptToMetaMap.set(sentMsg.message_id, {
+                chatId: parsed.sourceChatId,
+                messageId: parsed.messageId,
+                threadId: cbQuery.message?.message_thread_id ?? null,
+              });
+            }
           }
         }
       }

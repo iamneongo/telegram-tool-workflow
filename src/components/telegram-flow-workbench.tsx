@@ -4,11 +4,14 @@ import {
   AdjustmentsHorizontalIcon,
   ArrowPathRoundedSquareIcon,
   ArrowRightIcon,
+  ArrowUturnRightIcon,
   BoltIcon,
+  BriefcaseIcon,
   ChatBubbleBottomCenterTextIcon,
   CheckCircleIcon,
   Cog6ToothIcon,
   PaperAirplaneIcon,
+  PencilSquareIcon,
   PlayIcon,
   QuestionMarkCircleIcon,
   SquaresPlusIcon,
@@ -690,6 +693,42 @@ function NodeHeroIcon({ data }: { data: WorkflowNodeData }) {
   }
   if (sourceName.includes("Callback")) return <QuestionMarkCircleIcon aria-hidden="true" className={className} />;
   return <PaperAirplaneIcon aria-hidden="true" className={className} />;
+}
+
+function getPaletteIcon(itemId: string) {
+  const sizeClass = "h-5 w-5";
+  switch (itemId) {
+    case "telegram-send":
+      return {
+        bg: "bg-[#229ED9]/15 border-[#229ED9]/30 text-[#229ED9] shadow-[0_2px_10px_rgba(34,158,217,0.12)]",
+        icon: <PaperAirplaneIcon className={sizeClass} />,
+      };
+    case "telegram-edit":
+      return {
+        bg: "bg-[#2AABEE]/15 border-[#2AABEE]/30 text-[#2AABEE]",
+        icon: <PencilSquareIcon className={sizeClass} />,
+      };
+    case "if-condition":
+      return {
+        bg: "bg-emerald-500/15 border-emerald-500/30 text-emerald-400",
+        icon: <ArrowPathRoundedSquareIcon className={sizeClass} />,
+      };
+    case "forward-custom":
+      return {
+        bg: "bg-amber-500/15 border-amber-500/30 text-amber-400",
+        icon: <ArrowUturnRightIcon className={sizeClass} />,
+      };
+    case "forward-vattu":
+      return {
+        bg: "bg-[#FF9500]/15 border-[#FF9500]/30 text-[#FF9500] shadow-[0_2px_10px_rgba(255,149,0,0.12)]",
+        icon: <BriefcaseIcon className={sizeClass} />,
+      };
+    default:
+      return {
+        bg: "bg-white/10 border-white/10 text-white/70",
+        icon: <PaperAirplaneIcon className={sizeClass} />,
+      };
+  }
 }
 
 function WorkflowNodeCard({ data, selected }: NodeProps<WorkflowNode>) {
@@ -2413,7 +2452,7 @@ export default function TelegramFlowWorkbench() {
       ) : null}
 
       {paletteOpen ? (
-        <div className="pointer-events-auto absolute left-6 top-[108px] z-20 w-[240px] rounded-[8px] border border-white/10 bg-[#151516]/94 p-3 shadow-[0_24px_80px_rgba(0,0,0,0.38)] backdrop-blur-xl">
+        <div className="pointer-events-auto absolute left-6 top-[108px] z-20 w-[320px] rounded-[8px] border border-white/10 bg-[#151516]/94 p-4 shadow-[0_24px_80px_rgba(0,0,0,0.38)] backdrop-blur-xl">
           <div className="flex items-center justify-between gap-3">
             <div>
               <div className="text-[10px] uppercase tracking-[0.28em] text-white/35">Nodes</div>
@@ -2430,22 +2469,36 @@ export default function TelegramFlowWorkbench() {
             </button>
           </div>
           <div className="mt-3 space-y-2">
-            {NODE_PALETTE.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                draggable
-                onDragStart={(event) => handleDragStart(event, item.id)}
-                onDoubleClick={() => addNodeFromPalette(item.id, { x: 520 + nodeConfigs.length * 18, y: 420 })}
-                className="flex w-full items-center justify-between gap-3 rounded-[6px] border border-white/10 bg-white/[0.04] px-3 py-2 text-left transition hover:bg-white/[0.08]"
-              >
-                <span className="min-w-0">
-                  <span className="block truncate text-[12px] font-medium text-white/82">{item.label}</span>
-                  <span className="block truncate text-[10px] text-white/38">{item.n8nType}</span>
-                </span>
-                <span className="text-[10px] uppercase tracking-[0.16em] text-white/35">{item.kind}</span>
-              </button>
-            ))}
+            {NODE_PALETTE.map((item) => {
+              const style = getPaletteIcon(item.id);
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  draggable
+                  onDragStart={(event) => handleDragStart(event, item.id)}
+                  onDoubleClick={() => addNodeFromPalette(item.id, { x: 520 + nodeConfigs.length * 18, y: 420 })}
+                  className="flex w-full items-center gap-3 rounded-[8px] border border-white/10 bg-[#1e1e20]/60 p-2.5 text-left transition hover:border-white/18 hover:bg-[#252528]/80 cursor-grab active:cursor-grabbing"
+                >
+                  <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-[8px] border ${style.bg}`}>
+                    {style.icon}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <span className="block truncate text-[12px] font-semibold text-white/90">{item.label}</span>
+                    <span className="block truncate text-[10px] text-white/40 font-mono mt-0.5">{item.n8nType}</span>
+                  </div>
+                  <div className="shrink-0 flex flex-col items-end justify-center">
+                    <span className={`rounded-[4px] px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wider ${
+                      item.kind === "condition"
+                        ? "bg-emerald-500/10 text-emerald-300 border border-emerald-500/15"
+                        : "bg-sky-500/10 text-sky-300 border border-sky-500/15"
+                    }`}>
+                      {item.kind}
+                    </span>
+                  </div>
+                </button>
+              );
+            })}
           </div>
         </div>
       ) : null}

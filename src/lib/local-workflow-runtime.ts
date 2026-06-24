@@ -602,10 +602,13 @@ async function processUpdate(update: TelegramUpdate) {
   startExecution(update);
   markStep(nodeNames.trigger, "success", "Telegram Trigger nhận update.");
 
-  // Handle replies to force reply replacement materials prompt
+  // Handle replies to force reply replacement materials prompt or the request itself
   if (update.message && update.message.reply_to_message) {
-    const promptText = update.message.reply_to_message.text || "";
-    if (promptText.startsWith("Vui lòng reply tin nhắn này với tên vật tư thay thế")) {
+    const promptText = update.message.reply_to_message.text || update.message.reply_to_message.caption || "";
+    const isReplacementReply = promptText.includes("Vui lòng reply tin nhắn này với tên vật tư thay thế") ||
+                               promptText.includes("yêu cầu dùng vật tư thay thế");
+
+    if (isReplacementReply) {
       let customTarget: AllowedTopicConfig | undefined;
       if (runtime.forwardTargets) {
         const matchedNode = runtime.forwardTargets.find((ft) => ft.nodeName.startsWith("Có vật tư thay thế"));
@@ -619,12 +622,22 @@ async function processUpdate(update: TelegramUpdate) {
         const userName = user ? ([user.first_name, user.last_name].filter(Boolean).join(" ") || user.username || `User ${user.id}`) : "Ai đó";
         const replyText = update.message.text || update.message.caption || "";
 
+        let infoText = `🔄 <b>Thông tin vật tư thay thế từ ${userName}:</b>\n\n"${replyText}"`;
+        if (!promptText.includes("Vui lòng reply tin nhắn này")) {
+          // If they replied to the original request message rather than the prompt, include the first line of the request as context
+          const lines = promptText.split("\n").map(l => l.trim()).filter(Boolean);
+          const contextLine = lines[0] || "";
+          if (contextLine) {
+            infoText = `🔄 <b>Thông tin vật tư thay thế từ ${userName}</b> (cho yêu cầu: <i>${contextLine}</i>):\n\n"${replyText}"`;
+          }
+        }
+
         addLog("info", `Routing replacement material reply to: Có vật tư thay thế group`, update.update_id);
         await runStep(`Gửi câu trả lời vật tư thay thế`, () =>
           telegramRequest(runtime.token, "sendMessage", {
             chat_id: customTarget!.chatId,
             message_thread_id: customTarget!.threadId === null ? undefined : customTarget!.threadId,
-            text: `🔄 <b>Thông tin vật tư thay thế từ ${userName}:</b>\n\n"${replyText}"`,
+            text: infoText,
             parse_mode: "HTML",
           })
         );

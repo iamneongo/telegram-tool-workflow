@@ -608,6 +608,64 @@ async function processUpdate(update: TelegramUpdate) {
     markStep(nodeNames.getMessageCallback, "success", "Đã lấy message callback.");
     await runStep(nodeNames.callbackAnswer, () => answerCallback(update), "Đã answer callback.");
     const parsed = parseCallbackData(update.callback_query.data);
+
+    // Handle Materials callback options (vt_co, vt_khong, vt_thay)
+    if (parsed.action === "vt_co" || parsed.action === "vt_khong" || parsed.action === "vt_thay") {
+      const cbQuery = update.callback_query;
+      if (!cbQuery) return;
+      const user = cbQuery.from;
+      if (!user) return;
+
+      markStep("Xử lý phản hồi vật tư", "success", `Nhánh phản hồi vật tư: ${parsed.action}`);
+      const userName = [user.first_name, user.last_name].filter(Boolean).join(" ") || user.username || `User ${user.id}`;
+      const originalText = cbQuery.message?.text || cbQuery.message?.caption || "";
+      const chatId = cbQuery.message?.chat.id;
+      const messageId = cbQuery.message?.message_id;
+
+      if (chatId && messageId) {
+        let statusHtml = "";
+        if (parsed.action === "vt_co") {
+          statusHtml = `✅ <b>${userName}</b> đồng ý cung cấp vật tư.`;
+        } else if (parsed.action === "vt_khong") {
+          statusHtml = `❌ <b>${userName}</b> báo không có vật tư.`;
+        } else if (parsed.action === "vt_thay") {
+          statusHtml = `🔄 <b>${userName}</b> yêu cầu dùng vật tư thay thế.`;
+        }
+
+        const newText = `${originalText}\n\n${statusHtml}`;
+
+        // Edit message text and remove buttons
+        await runStep("Cập nhật trạng thái vật tư", () =>
+          telegramRequest(runtime.token, "editMessageText", {
+            chat_id: chatId,
+            message_id: messageId,
+            text: newText,
+            parse_mode: "HTML",
+          })
+        );
+
+        if (parsed.action === "vt_thay") {
+          // Send a force reply prompt
+          await runStep("Gửi yêu cầu nhập vật tư thay thế", () =>
+            telegramRequest(runtime.token, "sendMessage", {
+              chat_id: chatId,
+              message_thread_id: update.callback_query?.message?.message_thread_id,
+              text: `Vui lòng reply tin nhắn này với tên vật tư thay thế cho tin nhắn trên:`,
+              reply_markup: JSON.stringify({
+                force_reply: true,
+                selective: true,
+              }),
+            })
+          );
+        }
+      }
+
+      runtime.handledCount += 1;
+      finishExecution("success", `Đã cập nhật trạng thái vật tư: ${parsed.action}`);
+      addLog("info", `Updated material status to: ${parsed.action} by ${userName}`, update.update_id);
+      return;
+    }
+
     markStep(nodeNames.approvalDecision, "success", parsed.action === "approve" ? "Nhánh duyệt." : "Nhánh từ chối.");
 
     if (parsed.action === "approve") {
@@ -641,7 +699,7 @@ async function processUpdate(update: TelegramUpdate) {
       await runStep(nodeNames.approve, () => editCallbackButtons(update), "Ẩn nút đồng ý/không đồng ý.");
 
       if (matchedTargets.length > 0) {
-        // Send message to all matched targets (N x N routing)
+        // Send message to all matched targets (N x N routing) with Inline Keyboard options
         for (let i = 0; i < matchedTargets.length; i++) {
           const { target, nodeName } = matchedTargets[i];
           addLog("info", `Routing send message to: ${nodeName} (matched keywords)`, update.update_id);
@@ -651,6 +709,26 @@ async function processUpdate(update: TelegramUpdate) {
               chat_id: target.chatId,
               message_thread_id: target.threadId === null ? undefined : target.threadId,
               text: msgText,
+              reply_markup: JSON.stringify({
+                inline_keyboard: [
+                  [
+                    {
+                      text: "✅ Đồng ý cung cấp",
+                      callback_data: `vt_co|${parsed.sourceChatId}|${parsed.messageId}`,
+                    },
+                    {
+                      text: "❌ Không có vật tư",
+                      callback_data: `vt_khong|${parsed.sourceChatId}|${parsed.messageId}`,
+                    },
+                  ],
+                  [
+                    {
+                      text: "🔄 Vật tư thay thế là gì?",
+                      callback_data: `vt_thay|${parsed.sourceChatId}|${parsed.messageId}`,
+                    },
+                  ],
+                ],
+              }),
             }),
           );
         }

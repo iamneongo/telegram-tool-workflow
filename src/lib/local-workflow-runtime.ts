@@ -734,8 +734,30 @@ async function processUpdate(update: TelegramUpdate) {
     markStep(nodeNames.approvalDecision, "success", parsed.action === "approve" ? "Nhánh duyệt." : "Nhánh từ chối.");
 
     if (parsed.action === "approve") {
+      const cbQuery = update.callback_query;
+      if (!cbQuery) return;
+      const user = cbQuery.from;
+      if (!user) return;
+
+      const userName = [user.first_name, user.last_name].filter(Boolean).join(" ") || user.username || `User ${user.id}`;
+      const originalText = cbQuery.message?.text || cbQuery.message?.caption || "";
+      const chatId = cbQuery.message?.chat.id;
+      const messageId = cbQuery.message?.message_id;
+
+      if (chatId && messageId) {
+        const newText = `${originalText}\n\n✅ <b>${userName}</b> đã duyệt với phương án Đồng ý`;
+        await runStep(nodeNames.approve, () =>
+          telegramRequest(runtime.token, "editMessageText", {
+            chat_id: chatId,
+            message_id: messageId,
+            text: newText,
+            parse_mode: "HTML",
+          })
+        );
+      }
+
       // Dynamic routing for Materials based on user-configured keywords
-      const msgText = update.callback_query?.message?.text || update.callback_query?.message?.caption || "";
+      const msgText = originalText;
       const matchedTargets: { target: AllowedTopicConfig; nodeName: string }[] = [];
 
       if (runtime.forwardTargets && runtime.forwardTargets.length > 0) {
@@ -760,8 +782,6 @@ async function processUpdate(update: TelegramUpdate) {
           }
         }
       }
-
-      await runStep(nodeNames.approve, () => editCallbackButtons(update), "Ẩn nút đồng ý/không đồng ý.");
 
       if (matchedTargets.length > 0) {
         // Send message to all matched targets (N x N routing) with Inline Keyboard options
@@ -818,11 +838,32 @@ async function processUpdate(update: TelegramUpdate) {
     }
 
     if (parsed.action === "reject") {
-      await runStep(nodeNames.reject, () => editCallbackButtons(update), "Ẩn nút đồng ý/không đồng ý.");
+      const cbQuery = update.callback_query;
+      if (!cbQuery) return;
+      const user = cbQuery.from;
+      if (!user) return;
+
+      const userName = [user.first_name, user.last_name].filter(Boolean).join(" ") || user.username || `User ${user.id}`;
+      const originalText = cbQuery.message?.text || cbQuery.message?.caption || "";
+      const chatId = cbQuery.message?.chat.id;
+      const messageId = cbQuery.message?.message_id;
+
+      if (chatId && messageId) {
+        const newText = `${originalText}\n\n❌ <b>${userName}</b> đã duyệt với phương án Từ chối`;
+        await runStep(nodeNames.reject, () =>
+          telegramRequest(runtime.token, "editMessageText", {
+            chat_id: chatId,
+            message_id: messageId,
+            text: newText,
+            parse_mode: "HTML",
+          })
+        );
+      }
+
       await runStep(nodeNames.rejectNotify, () =>
         telegramRequest(runtime.token, "sendMessage", {
           chat_id: parsed.sourceChatId,
-          text: `Đã bị từ chối: ${update.callback_query?.message?.text || ""}`,
+          text: `Đã bị từ chối: ${originalText}`,
           disable_notification: false,
         }),
       );

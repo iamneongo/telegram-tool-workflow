@@ -1,4 +1,6 @@
 import { neon } from "@neondatabase/serverless";
+import { existsSync, readFileSync } from "node:fs";
+import path from "node:path";
 import type { TelegramWorkflowSnapshot } from "@/lib/telegram";
 
 type JsonRecord = Record<string, unknown>;
@@ -47,6 +49,7 @@ export type WorkspaceRecordPatch = {
 };
 
 const STORAGE_KEY = "telegram-workflow-workspace";
+const LEGACY_INVENTORY_PATH = path.join(process.cwd(), ".telegram-workflow-inventory.json");
 
 let sqlClient: ReturnType<typeof neon> | null = null;
 let tableReady = false;
@@ -216,6 +219,24 @@ function sanitizeWorkspaceRecord(raw: unknown): WorkspaceRecord {
   };
 }
 
+function readLegacyInventoryFile(): WorkflowInventory | null {
+  try {
+    if (!existsSync(LEGACY_INVENTORY_PATH)) {
+      return null;
+    }
+
+    const parsed = JSON.parse(readFileSync(LEGACY_INVENTORY_PATH, "utf8")) as Partial<WorkflowInventory>;
+    const inventory = sanitizeInventory(parsed);
+    if (inventory.groups.length === 0 && inventory.topics.length === 0) {
+      return null;
+    }
+
+    return inventory;
+  } catch {
+    return null;
+  }
+}
+
 async function ensureTable(sql: ReturnType<typeof neon>) {
   if (tableReady) {
     return;
@@ -229,6 +250,16 @@ async function ensureTable(sql: ReturnType<typeof neon>) {
     )
   `;
   tableReady = true;
+}
+
+async function upsertWorkspacePayload(sql: ReturnType<typeof neon>, record: WorkspaceRecord) {
+  await ensureTable(sql);
+  await sql`
+    INSERT INTO telegram_workflow_state (state_key, payload, updated_at)
+    VALUES (${STORAGE_KEY}, ${JSON.stringify(record)}::jsonb, now())
+    ON CONFLICT (state_key)
+    DO UPDATE SET payload = EXCLUDED.payload, updated_at = EXCLUDED.updated_at
+  `;
 }
 
 function deriveInventoryFromSnapshot(
@@ -290,6 +321,13 @@ function mergeWorkspaceRecord(current: WorkspaceRecord, patch: WorkspaceRecordPa
 export async function readWorkspaceRecord() {
   const sql = getSqlClient();
   if (!sql) {
+    const legacyInventory = readLegacyInventoryFile();
+    if (legacyInventory) {
+      const record = createDefaultWorkspaceRecord();
+      record.inventory = legacyInventory;
+      return { exists: true, record };
+    }
+
     return { exists: false, record: createDefaultWorkspaceRecord() };
   }
 
@@ -302,10 +340,25 @@ export async function readWorkspaceRecord() {
   `) as Array<{ payload: unknown }>;
 
   if (!rows.length) {
+    const legacyInventory = readLegacyInventoryFile();
+    if (legacyInventory) {
+      const record = createDefaultWorkspaceRecord();
+      record.inventory = legacyInventory;
+      await upsertWorkspacePayload(sql, record);
+      return { exists: true, record };
+    }
+
     return { exists: false, record: createDefaultWorkspaceRecord() };
   }
 
-  return { exists: true, record: sanitizeWorkspaceRecord(rows[0].payload) };
+  const record = sanitizeWorkspaceRecord(rows[0].payload);
+  const legacyInventory = readLegacyInventoryFile();
+  if (legacyInventory && record.inventory.groups.length === 0 && record.inventory.topics.length === 0) {
+    record.inventory = legacyInventory;
+    await upsertWorkspacePayload(sql, record);
+  }
+
+  return { exists: true, record };
 }
 
 export async function writeWorkspaceRecord(patch: WorkspaceRecordPatch) {
@@ -317,13 +370,7 @@ export async function writeWorkspaceRecord(patch: WorkspaceRecordPatch) {
     return next;
   }
 
-  await ensureTable(sql);
-  await sql`
-    INSERT INTO telegram_workflow_state (state_key, payload, updated_at)
-    VALUES (${STORAGE_KEY}, ${JSON.stringify(next)}::jsonb, now())
-    ON CONFLICT (state_key)
-    DO UPDATE SET payload = EXCLUDED.payload, updated_at = EXCLUDED.updated_at
-  `;
+  await upsertWorkspacePayload(sql, next);
 
   return next;
 }

@@ -2376,7 +2376,7 @@ export default function TelegramFlowWorkbench() {
         snapshot,
         runtimeStatus,
       },
-      inventory: snapshotToInventory(snapshot) ?? runtimeStatus?.inventory ?? undefined,
+      inventory: snapshot && (snapshot.groups.length > 0 || snapshot.topics.length > 0) ? snapshotToInventory(snapshot) ?? undefined : undefined,
     }),
     [
       autoPoll,

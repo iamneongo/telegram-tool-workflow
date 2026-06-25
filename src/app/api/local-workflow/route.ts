@@ -34,7 +34,7 @@ function getToken(body: RequestBody) {
 }
 
 export async function GET() {
-  return NextResponse.json({ ok: true, status: getLocalWorkflowStatus() });
+  return NextResponse.json({ ok: true, status: await getLocalWorkflowStatus() });
 }
 
 export async function POST(request: Request) {
@@ -57,7 +57,7 @@ export async function POST(request: Request) {
     }
 
     if (action === "stop") {
-      const status = stopLocalWorkflow();
+      const status = await stopLocalWorkflow();
       return NextResponse.json({ ok: true, status });
     }
 
@@ -67,13 +67,13 @@ export async function POST(request: Request) {
     }
 
     if (action === "refreshInventory") {
-      const status = refreshWorkflowInventory();
+      const status = await refreshWorkflowInventory();
       return NextResponse.json({ ok: true, status });
     }
 
-    return NextResponse.json({ ok: true, status: getLocalWorkflowStatus() });
+    return NextResponse.json({ ok: true, status: await getLocalWorkflowStatus() });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Không điều khiển được local workflow.";
-    return NextResponse.json({ ok: false, error: message, status: getLocalWorkflowStatus() }, { status: 500 });
+    return NextResponse.json({ ok: false, error: message, status: await getLocalWorkflowStatus() }, { status: 500 });
   }
 }

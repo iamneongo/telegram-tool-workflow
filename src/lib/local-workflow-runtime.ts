@@ -1,6 +1,5 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import path from "node:path";
-import { mirrorWorkspaceInventory, readWorkspaceInventory } from "@/lib/workspace-store";
+import { readWorkspaceInventory, writeWorkspaceRecord } from "@/lib/workspace-store";
 import {
   deleteTelegramWebhook,
   fetchUpdatesBatch,
@@ -142,7 +141,6 @@ const nodeNames = {
 const approvalChatId = -1004312722594;
 const approvalThreadId = 23;
 const forwardDestinationChatId = -5333921701;
-const inventoryPath = path.join(process.cwd(), ".telegram-workflow-inventory.json");
 
 const runtime = getRuntime();
 
@@ -166,7 +164,7 @@ function getRuntime(): LocalWorkflowRuntime {
       handledCount: 0,
       ignoredCount: 0,
       logs: [],
-      inventory: readInventory(),
+      inventory: emptyInventory(),
       executionSeq: 0,
       currentExecution: null,
       lastExecution: null,
@@ -175,7 +173,7 @@ function getRuntime(): LocalWorkflowRuntime {
   }
 
   if (!globalScope.__telegramLocalWorkflowRuntime.inventory) {
-    globalScope.__telegramLocalWorkflowRuntime.inventory = readInventory();
+    globalScope.__telegramLocalWorkflowRuntime.inventory = emptyInventory();
   }
 
   return globalScope.__telegramLocalWorkflowRuntime;
@@ -189,36 +187,8 @@ function emptyInventory(): WorkflowInventory {
   };
 }
 
-function readInventory(): WorkflowInventory {
-  try {
-    if (!existsSync(inventoryPath)) {
-      return emptyInventory();
-    }
-
-    const parsed = JSON.parse(readFileSync(inventoryPath, "utf8")) as Partial<WorkflowInventory>;
-    return {
-      groups: Array.isArray(parsed.groups) ? parsed.groups : [],
-      topics: Array.isArray(parsed.topics) ? parsed.topics : [],
-      updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : null,
-    };
-  } catch {
-    return emptyInventory();
-  }
-}
-
-function writeInventory() {
-  try {
-    writeFileSync(inventoryPath, JSON.stringify(runtime.inventory, null, 2));
-  } catch {
-    // Inventory is a local convenience cache; workflow processing should not fail if disk write fails.
-  }
-
-  mirrorWorkspaceInventory(runtime.inventory);
-}
-
 function resetInventory() {
   runtime.inventory = emptyInventory();
-  writeInventory();
 }
 
 function uniqueProbeTargets() {
@@ -399,7 +369,9 @@ function recordMessageInventory(message: TelegramMessage | undefined) {
   }
 
   runtime.inventory.updatedAt = new Date().toISOString();
-  writeInventory();
+  void writeWorkspaceRecord({ inventory: runtime.inventory }).catch(() => {
+    // Best-effort mirror only.
+  });
 }
 
 function recordChatInventory(chat: TelegramChat | undefined, membershipStatus?: string) {
@@ -412,7 +384,9 @@ function recordChatInventory(chat: TelegramChat | undefined, membershipStatus?: 
     removeInventoryGroup(chatId);
     removeInventoryTopicsForChat(chatId);
     runtime.inventory.updatedAt = new Date().toISOString();
-    writeInventory();
+    void writeWorkspaceRecord({ inventory: runtime.inventory }).catch(() => {
+      // Best-effort mirror only.
+    });
     return;
   }
 
@@ -423,7 +397,9 @@ function recordChatInventory(chat: TelegramChat | undefined, membershipStatus?: 
     `Chat ${chatId}`;
   upsertInventoryGroup(chatId, chatTitle, chat.type);
   runtime.inventory.updatedAt = new Date().toISOString();
-  writeInventory();
+  void writeWorkspaceRecord({ inventory: runtime.inventory }).catch(() => {
+    // Best-effort mirror only.
+  });
 }
 
 async function probeTarget(token: string, target: ProbeTarget) {
@@ -487,18 +463,20 @@ export async function probeWorkflowInventory(options: { token: string }) {
   }
 
   runtime.inventory.updatedAt = new Date().toISOString();
-  writeInventory();
+  void writeWorkspaceRecord({ inventory: runtime.inventory }).catch(() => {
+    // Best-effort mirror only.
+  });
 
   return {
     ...report,
-    status: getLocalWorkflowStatus(),
+    status: await getLocalWorkflowStatus(),
   };
 }
 
-export function refreshWorkflowInventory() {
-  resetInventory();
-  addLog("info", "Inventory cache cleared.");
-  return getLocalWorkflowStatus();
+export async function refreshWorkflowInventory() {
+  runtime.inventory = await readWorkspaceInventory();
+  addLog("info", "Inventory reloaded from database.");
+  return await getLocalWorkflowStatus();
 }
 
 function recordUpdateInventory(update: TelegramUpdate) {
@@ -537,7 +515,9 @@ export async function recordWorkflowSnapshotInventory(snapshot: TelegramWorkflow
   }));
 
   runtime.inventory.updatedAt = new Date().toISOString();
-  writeInventory();
+  void writeWorkspaceRecord({ inventory: runtime.inventory }).catch(() => {
+    // Best-effort mirror only.
+  });
 
   return runtime.inventory;
 }
@@ -1433,10 +1413,10 @@ export async function startLocalWorkflow(options: StartOptions) {
   schedulePoller();
   addLog("info", "Local workflow started.");
 
-  return getLocalWorkflowStatus();
+  return await getLocalWorkflowStatus();
 }
 
-export function stopLocalWorkflow() {
+export async function stopLocalWorkflow() {
   runtime.active = false;
   runtime.stoppedAt = new Date().toISOString();
   if (runtime.timer) {
@@ -1445,10 +1425,13 @@ export function stopLocalWorkflow() {
   }
   addLog("info", "Local workflow stopped.");
 
-  return getLocalWorkflowStatus();
+  return await getLocalWorkflowStatus();
 }
 
-export function getLocalWorkflowStatus(): LocalWorkflowStatus {
+export async function getLocalWorkflowStatus(): Promise<LocalWorkflowStatus> {
+  const inventory = await readWorkspaceInventory();
+  runtime.inventory = inventory;
+
   return {
     active: runtime.active,
     polling: runtime.polling,
@@ -1460,7 +1443,7 @@ export function getLocalWorkflowStatus(): LocalWorkflowStatus {
     handledCount: runtime.handledCount,
     ignoredCount: runtime.ignoredCount,
     logs: runtime.logs,
-    inventory: runtime.inventory,
+    inventory,
     allowedTopics: runtime.allowedTopics,
     executionSeq: runtime.executionSeq,
     currentExecution: runtime.currentExecution,

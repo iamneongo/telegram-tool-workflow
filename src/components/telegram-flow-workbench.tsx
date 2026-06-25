@@ -1979,8 +1979,9 @@ export default function TelegramFlowWorkbench() {
                       const isSelected = rowKey === selectedRowKey;
                       const keywords = formatMappingKeywords(row.keywords);
                       const target = row.target || null;
-                      const targetLabel = formatTopicSelectionLabel(target);
-                      const isConfigured = Boolean(target?.chatId);
+                      const targetMode = row.targetMode === "previous" ? "previous" : "fixed";
+                      const targetLabel = targetMode === "previous" ? "Đích trước đó" : formatTopicSelectionLabel(target);
+                      const isConfigured = targetMode === "previous" ? true : Boolean(target?.chatId);
 
                       return (
                         <div
@@ -2062,13 +2063,14 @@ export default function TelegramFlowWorkbench() {
                     </div>
 
                     <div className="divide-y divide-white/10">
-                      {mappings.map((row, idx) => {
-                        const rowKey = getMappingRowKey(row, idx);
-                        const isSelected = rowKey === selectedRowKey;
-                        const keywords = formatMappingKeywords(row.keywords);
-                        const target = row.target || null;
-                        const targetLabel = formatTopicSelectionLabel(target);
-                        const isConfigured = Boolean(target?.chatId);
+                    {mappings.map((row, idx) => {
+                      const rowKey = getMappingRowKey(row, idx);
+                      const isSelected = rowKey === selectedRowKey;
+                      const keywords = formatMappingKeywords(row.keywords);
+                      const target = row.target || null;
+                      const targetMode = row.targetMode === "previous" ? "previous" : "fixed";
+                      const targetLabel = targetMode === "previous" ? "Đích trước đó" : formatTopicSelectionLabel(target);
+                      const isConfigured = targetMode === "previous" ? true : Boolean(target?.chatId);
 
                         return (
                           <div
@@ -2203,13 +2205,13 @@ export default function TelegramFlowWorkbench() {
                             <TopicTargetPicker
                               topics={availableTopics}
                               value={selectedTarget}
-                              mode="fixed"
+                              mode={selectedRow?.targetMode === "previous" ? "previous" : "fixed"}
                               hasSnapshot={availableTopics.length > 0}
                               avatarRefreshKey={avatarRefreshKey}
                               onOpenManualInventory={openInventoryEditor}
                               onChange={(topic) => handleUpdateRowTarget(selectedRowKey ?? 0, topic)}
                               onClear={() => handleUpdateRowTarget(selectedRowKey ?? 0, null)}
-                              onModeChange={() => undefined}
+                              onModeChange={(mode) => handleUpdateRowTargetMode(selectedRowKey ?? 0, mode)}
                             />
                           </div>
                         </div>
@@ -2927,6 +2929,7 @@ export default function TelegramFlowWorkbench() {
         {
           ...sourceRow,
           id: `row-${Date.now()}-${currentMappings.length}`,
+          targetMode: sourceRow.targetMode ?? "fixed",
         },
       ];
 
@@ -2946,6 +2949,7 @@ export default function TelegramFlowWorkbench() {
         id: nextId,
         keywords: "",
         target: null,
+        targetMode: "fixed",
       },
     ];
 
@@ -2990,6 +2994,20 @@ export default function TelegramFlowWorkbench() {
       const id = row.id || idx;
       if (id === rowIdOrIndex) {
         return { ...row, target };
+      }
+      return row;
+    });
+
+    updateNodeMappings(nextMappings);
+  }, [selectedConfig, updateNodeMappings]);
+
+  const handleUpdateRowTargetMode = useCallback((rowIdOrIndex: string | number, targetMode: TargetRoutingMode) => {
+    if (!selectedConfig) return;
+    const currentMappings = (selectedConfig.parameters.mappings as any[]) || [];
+    const nextMappings = currentMappings.map((row, idx) => {
+      const id = row.id || idx;
+      if (id === rowIdOrIndex) {
+        return { ...row, targetMode };
       }
       return row;
     });
@@ -3202,12 +3220,12 @@ export default function TelegramFlowWorkbench() {
       if (isForwardOrRejectNode(config.name) || isSupplierConfirmationNode(config.name) || isInspectionMaterialNode(config.name) || config.name.startsWith("Gửi tin nhắn xác nhận")) {
         if (config.parameters.mappings && Array.isArray(config.parameters.mappings)) {
           for (const mapping of config.parameters.mappings) {
-            if (mapping.target && mapping.target.chatId) {
+            if ((mapping.targetMode === "previous" && mapping.target === null) || (mapping.target && mapping.target.chatId)) {
               forwardTargets.push({
                 nodeName: `${config.name} (${mapping.keywords || "không từ khóa"})`,
-                target: mapping.target,
+                target: mapping.target ?? undefined,
                 keywords: typeof mapping.keywords === "string" ? mapping.keywords : undefined,
-                routeMode: "fixed",
+                routeMode: mapping.targetMode === "previous" ? "previous" : "fixed",
               });
             }
           }
@@ -4541,7 +4559,7 @@ function TopicTargetPicker({
     onChange(topic);
   }
 
-  const selectionLabel = value ? formatTopicSelectionLabel(value) : "Chưa chọn";
+  const selectionLabel = mode === "previous" ? "Đích trước đó" : value ? formatTopicSelectionLabel(value) : "Chưa chọn";
 
   return (
     <div className="rounded-[6px] border border-white/10 bg-white/5 p-3">

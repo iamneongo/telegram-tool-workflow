@@ -46,12 +46,15 @@ export type TelegramUpdate = {
     date?: number;
     chat?: TelegramChat;
     from?: TelegramUser;
+    old_chat_member?: { status?: string };
     new_chat_member?: { status?: string };
   };
   chat_member?: {
     date?: number;
     chat?: TelegramChat;
     from?: TelegramUser;
+    old_chat_member?: { status?: string };
+    new_chat_member?: { status?: string };
   };
   chat_join_request?: {
     date?: number;

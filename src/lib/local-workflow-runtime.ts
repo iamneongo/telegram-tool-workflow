@@ -332,6 +332,14 @@ function upsertInventoryGroup(chatId: number, chatTitle: string, chatType: strin
   runtime.inventory.groups = [...runtime.inventory.groups, nextGroup];
 }
 
+function removeInventoryGroup(chatId: number) {
+  runtime.inventory.groups = runtime.inventory.groups.filter((group) => group.chatId !== chatId);
+}
+
+function removeInventoryTopicsForChat(chatId: number) {
+  runtime.inventory.topics = runtime.inventory.topics.filter((topic) => topic.chatId !== chatId);
+}
+
 function upsertInventoryTopic(chatId: number, threadId: number, chatTitle: string, topicName: string) {
   const existingIndex = runtime.inventory.topics.findIndex(
     (topic) => topic.chatId === chatId && topic.threadId === threadId,
@@ -355,6 +363,10 @@ function upsertInventoryTopic(chatId: number, threadId: number, chatTitle: strin
   runtime.inventory.topics = [...runtime.inventory.topics, nextTopic];
 }
 
+function isActiveMembershipStatus(status: string | undefined) {
+  return status === "creator" || status === "administrator" || status === "member" || status === "restricted";
+}
+
 function recordMessageInventory(message: TelegramMessage | undefined) {
   if (!message?.chat) return;
 
@@ -375,11 +387,19 @@ function recordMessageInventory(message: TelegramMessage | undefined) {
   writeInventory();
 }
 
-function recordChatInventory(chat: TelegramChat | undefined) {
+function recordChatInventory(chat: TelegramChat | undefined, membershipStatus?: string) {
   if (!chat) return;
 
   const chatId = Number(chat.id);
   if (!Number.isFinite(chatId)) return;
+
+  if (membershipStatus && !isActiveMembershipStatus(membershipStatus)) {
+    removeInventoryGroup(chatId);
+    removeInventoryTopicsForChat(chatId);
+    runtime.inventory.updatedAt = new Date().toISOString();
+    writeInventory();
+    return;
+  }
 
   const chatTitle =
     chat.title?.trim() ||
@@ -472,7 +492,7 @@ function recordUpdateInventory(update: TelegramUpdate) {
   recordMessageInventory(update.channel_post);
   recordMessageInventory(update.edited_channel_post);
   recordMessageInventory(update.callback_query?.message);
-  recordChatInventory(update.my_chat_member?.chat);
+  recordChatInventory(update.my_chat_member?.chat, update.my_chat_member?.new_chat_member?.status);
   recordChatInventory(update.chat_member?.chat);
   recordChatInventory(update.chat_join_request?.chat);
 }

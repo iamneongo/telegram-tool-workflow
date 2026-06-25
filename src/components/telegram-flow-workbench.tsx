@@ -44,6 +44,15 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { TelegramWorkflowSnapshot } from "@/lib/telegram";
 import type { WorkspaceRecord, WorkspaceRecordPatch } from "@/lib/workspace-store";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Separator } from "@/components/ui/separator";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
 
 type NodeAccent = "cyan" | "emerald" | "amber" | "rose";
 type NodeKind = "trigger" | "condition" | "action";
@@ -3401,149 +3410,175 @@ export default function TelegramFlowWorkbench() {
       ) : null}
 
       {paletteOpen ? (
-        <div className="pointer-events-auto absolute left-6 top-[108px] z-20 w-[320px] rounded-[8px] border border-white/10 bg-[#151516]/94 p-4 shadow-[0_24px_80px_rgba(0,0,0,0.38)] backdrop-blur-xl">
-          <div className="flex items-center justify-between gap-3">
+        <Card className="pointer-events-auto absolute left-6 top-[108px] z-20 w-[320px] border-white/10 bg-[#151516]/94 shadow-[0_24px_80px_rgba(0,0,0,0.38)] backdrop-blur-xl">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 p-4 pb-3">
             <div>
-              <div className="text-[10px] uppercase tracking-[0.28em] text-white/35">Nodes</div>
-              <div className="mt-1 text-sm font-medium text-white">Palette</div>
+              <CardTitle className="text-sm font-medium text-white">Palette</CardTitle>
+              <CardDescription className="text-[10px] uppercase tracking-[0.28em] text-white/35">
+                Nodes
+              </CardDescription>
             </div>
-            <button
+            <Button
               type="button"
+              variant="ghost"
+              size="icon-sm"
               onClick={() => setPaletteOpen(false)}
               aria-label="Đóng"
               title="Đóng"
-              className="flex h-8 w-8 items-center justify-center rounded-[6px] border border-white/10 bg-white/5 text-white/35 transition hover:bg-white/10 hover:text-white"
+              className="text-white/45 hover:bg-white/10 hover:text-white"
             >
               <XMarkIcon aria-hidden="true" className="h-4 w-4" />
-            </button>
-          </div>
-          <div className="mt-3 max-h-[28rem] overflow-auto pr-2">
-            <div className="space-y-2">
-            {NODE_PALETTE.map((item) => {
-              const style = getPaletteIcon(item.id);
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  draggable
-                  onDragStart={(event) => handleDragStart(event, item.id)}
-                  onDoubleClick={() => addNodeFromPalette(item.id, { x: 520 + nodeConfigs.length * 18, y: 420 })}
-                  className="flex w-full cursor-grab items-center gap-3 rounded-[8px] border border-white/10 bg-white/5 p-2.5 text-left transition hover:bg-white/10 active:cursor-grabbing"
-                >
-                  <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-[8px] border ${style.bg}`}>
-                    {style.icon}
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <span className="block truncate text-[12px] font-semibold text-white">{item.label}</span>
-                    <span className="mt-0.5 block truncate font-mono text-[10px] text-white/35">{item.n8nType}</span>
-                  </div>
-                  <div className="shrink-0 flex flex-col items-end justify-center">
-                    <span className={`rounded-[4px] px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wider ${
-                      item.kind === "condition"
-                        ? "bg-emerald-500/10 text-emerald-300 border border-emerald-500/15"
-                        : "bg-sky-500/10 text-sky-300 border border-sky-500/15"
-                    }`}>
-                      {item.kind}
-                    </span>
-                  </div>
-                </button>
-              );
-            })}
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {configOpen ? (
-        <div className={configPanelWrapperClass}>
-          <div className={configPanelCardClass}>
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <div className="text-[10px] uppercase tracking-[0.28em] text-white/35">Node</div>
-                {selectedConfig ? (
-                  isRenamingNode ? (
-                    <input
-                      autoFocus
-                      value={renameDraft}
-                      onChange={(event) => setRenameDraft(event.target.value)}
-                      onBlur={commitNodeRename}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") {
-                          event.preventDefault();
-                          commitNodeRename();
-                        }
-                        if (event.key === "Escape") {
-                          event.preventDefault();
-                          cancelNodeRename();
-                        }
-                      }}
-                      className="mt-2 h-9 w-full rounded-[6px] border border-sky-400/30 bg-[#101011] px-3 text-[14px] font-medium text-white outline-none focus:border-sky-400/50"
-                    />
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={beginNodeRename}
-                      className="mt-2 block w-full truncate text-left text-sm font-medium text-white transition hover:text-sky-300"
-                      title="Bấm để đổi tên"
-                    >
-                      {getNodeLabel(selectedConfig)}
-                    </button>
-                  )
-                ) : (
-                  <div className="mt-2 truncate text-sm font-medium text-white">Node</div>
-                )}
-                <div className="mt-1 truncate text-[11px] leading-5 text-white/35">
-                  {selectedConfig ? normalizeSubtitle(snapshot, selectedConfig) : "Chọn node để cấu hình"}
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setConfigPanelExpanded((value) => !value)}
-                  aria-label={configPanelExpanded ? "Thu nhỏ" : "Phóng to"}
-                  title={configPanelExpanded ? "Thu nhỏ" : "Phóng to"}
-                  className="flex h-8 w-8 items-center justify-center rounded-[6px] border border-white/10 bg-white/5 text-white/35 transition hover:bg-white/10 hover:text-white"
-                >
-                  {configPanelExpanded ? <ArrowsPointingInIcon aria-hidden="true" className="h-4 w-4" /> : <ArrowsPointingOutIcon aria-hidden="true" className="h-4 w-4" />}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setConfigOpen(false)}
-                  aria-label="Đóng"
-                  title="Đóng"
-                  className="flex h-8 w-8 items-center justify-center rounded-[6px] border border-white/10 bg-white/5 text-white/35 transition hover:bg-white/10 hover:text-white"
-                >
-                  <XMarkIcon aria-hidden="true" className="h-4 w-4" />
-                </button>
-              </div>
-            </div>
-
-            {configPanelTabs.length ? (
-              <div className="mt-4 flex flex-wrap gap-1 rounded-[8px] border border-white/10 bg-white/5 p-1">
-                {configPanelTabs.map((tab) => {
-                  const active = tab.id === activeConfigPanelTab;
+            </Button>
+          </CardHeader>
+          <Separator className="bg-white/10" />
+          <CardContent className="p-4 pt-0">
+            <ScrollArea className="h-[28rem] pr-3">
+              <div className="space-y-2">
+                {NODE_PALETTE.map((item) => {
+                  const style = getPaletteIcon(item.id);
                   return (
                     <button
-                      key={tab.id}
+                      key={item.id}
                       type="button"
-                      onClick={() => setConfigPanelTab(tab.id)}
-                      title={tab.id === "template" ? MESSAGE_TEMPLATE_HELP_TEXT : undefined}
-                      className={[
-                        "rounded-[6px] px-3 py-1.5 text-[11px] font-medium transition",
-                        active ? "bg-sky-400 text-slate-950" : "text-white/60 hover:bg-white/10 hover:text-white",
-                      ].join(" ")}
+                      draggable
+                      onDragStart={(event) => handleDragStart(event, item.id)}
+                      onDoubleClick={() => addNodeFromPalette(item.id, { x: 520 + nodeConfigs.length * 18, y: 420 })}
+                      className="flex w-full cursor-grab items-center gap-3 rounded-[8px] border border-white/10 bg-white/5 p-2.5 text-left transition hover:bg-white/10 active:cursor-grabbing"
                     >
-                      {tab.label}
+                      <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-[8px] border ${style.bg}`}>
+                        {style.icon}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <span className="block truncate text-[12px] font-semibold text-white">{item.label}</span>
+                        <span className="mt-0.5 block truncate font-mono text-[10px] text-white/35">{item.n8nType}</span>
+                      </div>
+                      <div className="shrink-0 flex flex-col items-end justify-center">
+                        <Badge
+                          variant="secondary"
+                          className={`rounded-[4px] px-1.5 py-0.5 text-[8px] font-bold uppercase tracking-wider ${
+                            item.kind === "condition"
+                              ? "border-emerald-500/15 bg-emerald-500/10 text-emerald-300"
+                              : "border-sky-500/15 bg-sky-500/10 text-sky-300"
+                          }`}
+                        >
+                          {item.kind}
+                        </Badge>
+                      </div>
                     </button>
                   );
                 })}
               </div>
-            ) : null}
+            </ScrollArea>
+          </CardContent>
+        </Card>
+      ) : null}
 
-            <div className="mt-4 min-h-0 flex-1 overflow-auto pr-1">
-              {selectedConfig ? renderConfigPanelContent(activeConfigPanelTab) : null}
-            </div>
-          </div>
+      {configOpen ? (
+        <div className={configPanelWrapperClass}>
+          <Card className={configPanelCardClass}>
+            <Tabs
+              value={activeConfigPanelTab}
+              onValueChange={(value) => setConfigPanelTab(value as ConfigPanelTab)}
+              className="flex h-full w-full flex-col"
+            >
+            <CardHeader className="space-y-3 p-4 pb-0">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <CardDescription className="text-[10px] uppercase tracking-[0.28em] text-white/35">
+                    Node
+                  </CardDescription>
+                  {selectedConfig ? (
+                    isRenamingNode ? (
+                      <Input
+                        autoFocus
+                        value={renameDraft}
+                        onChange={(event) => setRenameDraft(event.target.value)}
+                        onBlur={commitNodeRename}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") {
+                            event.preventDefault();
+                            commitNodeRename();
+                          }
+                          if (event.key === "Escape") {
+                            event.preventDefault();
+                            cancelNodeRename();
+                          }
+                        }}
+                        className="mt-2 h-9 w-full rounded-[6px] border-sky-400/30 bg-[#101011] px-3 text-[14px] font-medium text-white outline-none focus:border-sky-400/50"
+                      />
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={beginNodeRename}
+                        className="mt-2 block w-full truncate text-left text-sm font-medium text-white transition hover:text-sky-300"
+                        title="Bấm để đổi tên"
+                      >
+                        {getNodeLabel(selectedConfig)}
+                      </button>
+                    )
+                  ) : (
+                    <div className="mt-2 truncate text-sm font-medium text-white">Node</div>
+                  )}
+                  <CardDescription className="mt-1 truncate text-[11px] leading-5 text-white/35">
+                    {selectedConfig ? normalizeSubtitle(snapshot, selectedConfig) : "Chọn node để cấu hình"}
+                  </CardDescription>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon-sm"
+                    onClick={() => setConfigPanelExpanded((value) => !value)}
+                    aria-label={configPanelExpanded ? "Thu nhỏ" : "Phóng to"}
+                    title={configPanelExpanded ? "Thu nhỏ" : "Phóng to"}
+                    className="border-white/10 bg-white/5 text-white/35 hover:bg-white/10 hover:text-white"
+                  >
+                    {configPanelExpanded ? <ArrowsPointingInIcon aria-hidden="true" className="h-4 w-4" /> : <ArrowsPointingOutIcon aria-hidden="true" className="h-4 w-4" />}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon-sm"
+                    onClick={() => setConfigOpen(false)}
+                    aria-label="Đóng"
+                    title="Đóng"
+                    className="border-white/10 bg-white/5 text-white/35 hover:bg-white/10 hover:text-white"
+                  >
+                    <XMarkIcon aria-hidden="true" className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+
+              {configPanelTabs.length ? (
+                <TabsList className="flex h-auto w-full flex-wrap justify-start gap-1 rounded-[8px] border border-white/10 bg-white/5 p-1">
+                  {configPanelTabs.map((tab) => (
+                    <TabsTrigger
+                      key={tab.id}
+                      value={tab.id}
+                      title={tab.id === "template" ? MESSAGE_TEMPLATE_HELP_TEXT : undefined}
+                      className="rounded-[6px] px-3 py-1.5 text-[11px] font-medium text-white/60 data-active:bg-sky-400 data-active:text-slate-950 hover:bg-white/10 hover:text-white"
+                    >
+                      {tab.label}
+                    </TabsTrigger>
+                  ))}
+                </TabsList>
+              ) : null}
+            </CardHeader>
+
+            <Separator className="bg-white/10" />
+            <CardContent className="min-h-0 flex-1 px-4 pb-4 pt-3">
+              <ScrollArea className="h-[calc(100vh-10rem)] pr-2">
+                <div className="space-y-4 pr-1">
+                  {configPanelTabs.map((tab) => (
+                    <TabsContent key={tab.id} value={tab.id} className="mt-0 outline-none">
+                      {selectedConfig ? renderConfigPanelContent(tab.id) : null}
+                    </TabsContent>
+                  ))}
+                </div>
+              </ScrollArea>
+            </CardContent>
+            </Tabs>
+          </Card>
         </div>
       ) : null}
 
@@ -3553,74 +3588,51 @@ export default function TelegramFlowWorkbench() {
         </div>
       ) : null}
 
-      {refreshConfirmOpen ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 px-4 py-6 backdrop-blur-sm">
-          <div className="w-full max-w-[420px] rounded-[12px] border border-white/10 bg-[#151516]/96 p-4 shadow-[0_30px_100px_rgba(0,0,0,0.55)]">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <div className="text-[10px] uppercase tracking-[0.28em] text-white/35">Confirm refresh</div>
-                <div className="mt-1 text-sm font-medium text-white">Xóa cache inventory và quét lại</div>
-              </div>
-              <button
-                type="button"
-                onClick={closeRefreshConfirm}
-                disabled={refreshBusy}
-                className="flex h-8 w-8 items-center justify-center rounded-[6px] border border-white/10 bg-white/5 text-white/35 transition hover:bg-white/10 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
-                aria-label="Đóng"
-                title="Đóng"
-              >
-                <XMarkIcon aria-hidden="true" className="h-4 w-4" />
-              </button>
-            </div>
-
-            <div className="mt-3 rounded-[8px] border border-amber-400/20 bg-amber-400/10 px-3 py-2 text-[12px] leading-5 text-amber-50/90">
+      <AlertDialog open={refreshConfirmOpen} onOpenChange={(open) => !open && closeRefreshConfirm()}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Xóa cache inventory và quét lại</AlertDialogTitle>
+            <AlertDialogDescription>
               Thao tác này sẽ xóa cache group/topic hiện tại ngay lập tức, rồi quét lại Telegram để nạp dữ liệu mới.
-            </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
 
-            <div className="mt-4">
-              <label className="block">
-                <div className="text-[10px] uppercase tracking-[0.22em] text-white/35">Nhập xác nhận</div>
-                <input
-                  autoFocus
-                  value={refreshConfirmDraft}
-                  onChange={(event) => setRefreshConfirmDraft(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Escape") {
-                      event.preventDefault();
-                      closeRefreshConfirm();
-                    }
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      void confirmRefreshInventory();
-                    }
-                  }}
-                  placeholder='Gõ "REFRESH"'
-                  className="mt-2 h-10 w-full rounded-[6px] border border-white/10 bg-[#0d1118] px-3 text-[12px] text-white outline-none placeholder:text-white/28 focus:border-sky-400/40"
-                />
-              </label>
-            </div>
-
-            <div className="mt-4 flex items-center justify-end gap-2">
-              <button
-                type="button"
-                onClick={closeRefreshConfirm}
-                disabled={refreshBusy}
-                className="h-9 rounded-[6px] border border-white/10 bg-white/5 px-3 text-[12px] font-medium text-white/75 transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                Hủy
-              </button>
-              <button
-                type="button"
-                onClick={() => void confirmRefreshInventory()}
-                disabled={refreshBusy || refreshConfirmDraft.trim().toUpperCase() !== "REFRESH"}
-                className="h-9 rounded-[6px] border border-rose-400/20 bg-rose-400/12 px-3 text-[12px] font-medium text-rose-100 transition hover:bg-rose-400/18 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {refreshBusy ? "Đang refresh..." : "Xóa cache và refresh"}
-              </button>
-            </div>
+          <div className="rounded-[8px] border border-amber-400/20 bg-amber-400/10 px-3 py-2 text-[12px] leading-5 text-amber-50/90">
+            Thao tác này sẽ xóa cache group/topic hiện tại ngay lập tức, rồi quét lại Telegram để nạp dữ liệu mới.
           </div>
-        </div>
-      ) : null}
+
+          <div className="space-y-2">
+            <div className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground">Nhập xác nhận</div>
+            <Input
+              autoFocus
+              value={refreshConfirmDraft}
+              onChange={(event) => setRefreshConfirmDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  closeRefreshConfirm();
+                }
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void confirmRefreshInventory();
+                }
+              }}
+              placeholder='Gõ "REFRESH"'
+            />
+          </div>
+
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={refreshBusy}>Hủy</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={refreshBusy || refreshConfirmDraft.trim().toUpperCase() !== "REFRESH"}
+              onClick={() => void confirmRefreshInventory()}
+              className="bg-rose-500 text-white hover:bg-rose-500/90"
+            >
+              {refreshBusy ? "Đang refresh..." : "Xóa cache và refresh"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </main>
   );
 }
@@ -4002,11 +4014,11 @@ function SafeMessageTemplateEditor({
           </div>
           <label className="block">
             <div className="text-[10px] uppercase tracking-[0.22em] text-white/35">Text được sửa</div>
-            <textarea
+            <Textarea
               value={editableText}
               onChange={(event) => handleChange(event.target.value)}
               rows={2}
-              className="mt-2 w-full rounded-[6px] border border-white/10 bg-[#0d1118] px-3 py-2 text-[12px] leading-5 text-white outline-none placeholder:text-white/28 focus:border-sky-400/40"
+              className="mt-2 w-full bg-[#0d1118] px-3 py-2 text-[12px] leading-5 text-white placeholder:text-white/28 focus:border-sky-400/40"
               placeholder="Đã bị từ chối: "
             />
           </label>
@@ -4025,11 +4037,11 @@ function SafeMessageTemplateEditor({
           </div>
           <label className="block">
             <div className="text-[10px] uppercase tracking-[0.22em] text-white/35">Text được sửa</div>
-            <textarea
+            <Textarea
               value={editableText}
               onChange={(event) => handleChange(event.target.value)}
               rows={3}
-              className="mt-2 w-full rounded-[6px] border border-white/10 bg-[#0d1118] px-3 py-2 text-[12px] leading-5 text-white outline-none placeholder:text-white/28 focus:border-sky-400/40"
+              className="mt-2 w-full bg-[#0d1118] px-3 py-2 text-[12px] leading-5 text-white placeholder:text-white/28 focus:border-sky-400/40"
               placeholder=" nghiệm thu vật tư sau xác nhận nhà cung ứng.\n\n"
             />
           </label>

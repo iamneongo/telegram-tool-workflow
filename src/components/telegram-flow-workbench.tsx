@@ -1891,6 +1891,11 @@ export default function TelegramFlowWorkbench() {
           selectedCount={selectedAllowedTopics.length}
           hasSnapshot={Boolean(snapshot)}
           avatarRefreshKey={avatarRefreshKey}
+          onRequireTopics={() => {
+            if (!workflowActive) {
+              void fetchWorkflow({ silent: true });
+            }
+          }}
           onChange={setAllowedTopicsForSelectedNode}
           onSelectAll={() => setAllowedTopicsForSelectedNode(availableTopics)}
           onClear={() => setAllowedTopicsForSelectedNode([])}
@@ -2188,6 +2193,11 @@ export default function TelegramFlowWorkbench() {
                               mode="fixed"
                               hasSnapshot={Boolean(snapshot)}
                               avatarRefreshKey={avatarRefreshKey}
+                              onRequireTopics={() => {
+                                if (!workflowActive) {
+                                  void fetchWorkflow({ silent: true });
+                                }
+                              }}
                               onChange={(topic) => handleUpdateRowTarget(selectedRowKey ?? 0, topic)}
                               onClear={() => handleUpdateRowTarget(selectedRowKey ?? 0, null)}
                               onModeChange={() => undefined}
@@ -2225,6 +2235,11 @@ export default function TelegramFlowWorkbench() {
           mode={getTargetRoutingMode(selectedConfig.parameters)}
           hasSnapshot={Boolean(snapshot)}
           avatarRefreshKey={avatarRefreshKey}
+          onRequireTopics={() => {
+            if (!workflowActive) {
+              void fetchWorkflow({ silent: true });
+            }
+          }}
           onChange={setTargetForSelectedNode}
           onClear={() => setTargetForSelectedNode(null)}
           onModeChange={setTargetModeForSelectedNode}
@@ -3991,6 +4006,7 @@ function AllowedTopicPicker({
   selectedCount,
   hasSnapshot,
   avatarRefreshKey,
+  onRequireTopics,
   onChange,
   onSelectAll,
   onClear,
@@ -4000,6 +4016,7 @@ function AllowedTopicPicker({
   selectedCount: number;
   hasSnapshot: boolean;
   avatarRefreshKey: number;
+  onRequireTopics?: () => void;
   onChange: (topics: AllowedTopicSelection[]) => void;
   onSelectAll: () => void;
   onClear: () => void;
@@ -4007,6 +4024,7 @@ function AllowedTopicPicker({
   const selectedKeys = new Set(selectedTopics.map(topicKey));
   const groups = groupTopics(topics);
   const [open, setOpen] = useState(false);
+  const requestedTopicsRef = useRef(false);
 
   function toggleTopic(topic: AllowedTopicSelection) {
     const key = topicKey(topic);
@@ -4031,6 +4049,20 @@ function AllowedTopicPicker({
     }
     onChange(next);
   }
+
+  useEffect(() => {
+    if (!open) {
+      requestedTopicsRef.current = false;
+      return;
+    }
+
+    if (topics.length > 0 || requestedTopicsRef.current) {
+      return;
+    }
+
+    requestedTopicsRef.current = true;
+    onRequireTopics?.();
+  }, [open, onRequireTopics, topics.length]);
 
   return (
     <div className="rounded-[6px] border border-white/10 bg-white/5 p-3">
@@ -4178,6 +4210,7 @@ function TopicTargetPicker({
   mode,
   hasSnapshot,
   avatarRefreshKey,
+  onRequireTopics,
   onChange,
   onClear,
   onModeChange,
@@ -4187,6 +4220,7 @@ function TopicTargetPicker({
   mode: TargetRoutingMode;
   hasSnapshot: boolean;
   avatarRefreshKey: number;
+  onRequireTopics?: () => void;
   onChange: (topic: AllowedTopicSelection) => void;
   onClear: () => void;
   onModeChange: (mode: TargetRoutingMode) => void;
@@ -4194,6 +4228,7 @@ function TopicTargetPicker({
   const selectedKey = value ? topicKey(value) : null;
   const groups = buildTopicPickerGroups(topics);
   const [open, setOpen] = useState(false);
+  const requestedTopicsRef = useRef(false);
 
   function chooseTopic(topic: AllowedTopicSelection) {
     const key = topicKey(topic);
@@ -4205,6 +4240,20 @@ function TopicTargetPicker({
   }
 
   const selectionLabel = value ? formatTopicSelectionLabel(value) : "Chưa chọn";
+
+  useEffect(() => {
+    if (!open) {
+      requestedTopicsRef.current = false;
+      return;
+    }
+
+    if (topics.length > 0 || requestedTopicsRef.current) {
+      return;
+    }
+
+    requestedTopicsRef.current = true;
+    onRequireTopics?.();
+  }, [open, onRequireTopics, topics.length]);
 
   return (
     <div className="rounded-[6px] border border-white/10 bg-white/5 p-3">

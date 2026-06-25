@@ -3,7 +3,6 @@
 import {
   AdjustmentsHorizontalIcon,
   ArrowPathRoundedSquareIcon,
-  ArrowPathIcon,
   ArrowRightIcon,
   ArrowUturnRightIcon,
   ArrowsPointingInIcon,
@@ -50,12 +49,13 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { TelegramWorkflowSnapshot } from "@/lib/telegram";
 import type { WorkspaceRecord, WorkspaceRecordPatch } from "@/lib/workspace-store";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -1752,15 +1752,25 @@ function createDroppedNodeConfig(templateId: string, index: number): N8nNodeConf
 export default function TelegramFlowWorkbench() {
   const [token, setToken] = useState("");
   const [deepScan, setDeepScan] = useState(true);
-  const [autoPoll, setAutoPoll] = useState(true);
+  const [autoPoll, setAutoPoll] = useState(false);
   const [workflowActive, setWorkflowActive] = useState(false);
   const [runtimeStatus, setRuntimeStatus] = useState<RuntimeStatus | null>(null);
   const [runtimeBusy, setRuntimeBusy] = useState(false);
   const [probeBusy, setProbeBusy] = useState(false);
-  const [refreshBusy, setRefreshBusy] = useState(false);
   const [avatarSyncBusy, setAvatarSyncBusy] = useState(false);
-  const [refreshConfirmOpen, setRefreshConfirmOpen] = useState(false);
-  const [refreshConfirmDraft, setRefreshConfirmDraft] = useState("");
+  const [inventoryEditorOpen, setInventoryEditorOpen] = useState(false);
+  const [inventorySaveBusy, setInventorySaveBusy] = useState(false);
+  const [manualGroupDraft, setManualGroupDraft] = useState({
+    chatId: "",
+    chatTitle: "",
+    chatType: "group",
+  });
+  const [manualTopicDraft, setManualTopicDraft] = useState({
+    chatId: "",
+    threadId: "",
+    chatTitle: "",
+    topicName: "",
+  });
   const [isFetching, setIsFetching] = useState(false);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [snapshot, setSnapshot] = useState<TelegramWorkflowSnapshot | null>(null);
@@ -1889,13 +1899,9 @@ export default function TelegramFlowWorkbench() {
           topics={availableTopics}
           selectedTopics={selectedAllowedTopics}
           selectedCount={selectedAllowedTopics.length}
-          hasSnapshot={Boolean(snapshot)}
+          hasSnapshot={availableTopics.length > 0}
           avatarRefreshKey={avatarRefreshKey}
-          onRequireTopics={() => {
-            if (!workflowActive) {
-              void fetchWorkflow({ silent: true });
-            }
-          }}
+          onOpenManualInventory={openInventoryEditor}
           onChange={setAllowedTopicsForSelectedNode}
           onSelectAll={() => setAllowedTopicsForSelectedNode(availableTopics)}
           onClear={() => setAllowedTopicsForSelectedNode([])}
@@ -2191,13 +2197,9 @@ export default function TelegramFlowWorkbench() {
                               topics={availableTopics}
                               value={selectedTarget}
                               mode="fixed"
-                              hasSnapshot={Boolean(snapshot)}
+                              hasSnapshot={availableTopics.length > 0}
                               avatarRefreshKey={avatarRefreshKey}
-                              onRequireTopics={() => {
-                                if (!workflowActive) {
-                                  void fetchWorkflow({ silent: true });
-                                }
-                              }}
+                              onOpenManualInventory={openInventoryEditor}
                               onChange={(topic) => handleUpdateRowTarget(selectedRowKey ?? 0, topic)}
                               onClear={() => handleUpdateRowTarget(selectedRowKey ?? 0, null)}
                               onModeChange={() => undefined}
@@ -2233,13 +2235,9 @@ export default function TelegramFlowWorkbench() {
           topics={availableTopics}
           value={getTopicSelection(selectedConfig.parameters)}
           mode={getTargetRoutingMode(selectedConfig.parameters)}
-          hasSnapshot={Boolean(snapshot)}
+          hasSnapshot={availableTopics.length > 0}
           avatarRefreshKey={avatarRefreshKey}
-          onRequireTopics={() => {
-            if (!workflowActive) {
-              void fetchWorkflow({ silent: true });
-            }
-          }}
+          onOpenManualInventory={openInventoryEditor}
           onChange={setTargetForSelectedNode}
           onClear={() => setTargetForSelectedNode(null)}
           onModeChange={setTargetModeForSelectedNode}
@@ -2273,7 +2271,7 @@ export default function TelegramFlowWorkbench() {
   }
 
   const availableTopics = useMemo(() => {
-    const available = [...getAvailableTopicsFromInventory(runtimeStatus?.inventory), ...getAvailableTopics(snapshot)];
+    const available = getAvailableTopicsFromInventory(runtimeStatus?.inventory);
     const seen = new Set<string>();
 
     return available.filter((topic) => {
@@ -2282,7 +2280,7 @@ export default function TelegramFlowWorkbench() {
       seen.add(key);
       return true;
     });
-  }, [runtimeStatus?.inventory, snapshot]);
+  }, [runtimeStatus?.inventory]);
   const visibleExecution = runtimeStatus?.currentExecution ?? runtimeStatus?.lastExecution ?? null;
   const executionVisuals = useMemo(() => {
     const nameToConfig = new Map(nodeConfigs.map((config) => [config.name, config]));
@@ -2390,7 +2388,6 @@ export default function TelegramFlowWorkbench() {
         edges,
         snapshot,
       },
-      inventory: snapshot && (snapshot.groups.length > 0 || snapshot.topics.length > 0) ? snapshotToInventory(snapshot) ?? undefined : undefined,
     }),
     [
       autoPoll,
@@ -2472,7 +2469,7 @@ export default function TelegramFlowWorkbench() {
 
         setToken(state.ui.token);
         setDeepScan(state.ui.deepScan);
-        setAutoPoll(state.ui.autoPoll);
+        setAutoPoll(false);
         setSettingsOpen(state.ui.settingsOpen);
         setConfigOpen(state.ui.configOpen);
         setConfigPanelTab((state.ui.configPanelTab as ConfigPanelTab | undefined) ?? getDefaultConfigPanelTab(undefined));
@@ -3010,6 +3007,152 @@ export default function TelegramFlowWorkbench() {
     }
   }, [applyRuntimeStatus]);
 
+  const openInventoryEditor = useCallback(() => {
+    setInventoryEditorOpen(true);
+  }, []);
+
+  const closeInventoryEditor = useCallback(() => {
+    if (inventorySaveBusy) {
+      return;
+    }
+    setInventoryEditorOpen(false);
+  }, [inventorySaveBusy]);
+
+  const getCurrentInventory = useCallback(() => {
+    return runtimeStatus?.inventory ?? { groups: [], topics: [], updatedAt: null };
+  }, [runtimeStatus?.inventory]);
+
+  const persistInventory = useCallback(
+    async (nextInventory: RuntimeStatus["inventory"], successMessage: string) => {
+      setInventorySaveBusy(true);
+      setStatus({ kind: "loading", text: "Saving inventory manually" });
+
+      try {
+        const response = await fetch("/api/workspace-state", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ inventory: nextInventory }),
+        });
+        const payload = (await response.json()) as { ok: boolean; error?: string; state?: unknown };
+        if (!response.ok || !payload.ok) {
+          throw new Error(payload.error || "Không lưu được inventory.");
+        }
+
+        setRuntimeStatus((current) => (current ? { ...current, inventory: nextInventory } : current));
+        setStatus({ kind: "success", text: successMessage });
+        showToast(successMessage);
+        return true;
+      } catch (error) {
+        const message = getCleanErrorMessage(error, "Không lưu được inventory.");
+        setStatus({ kind: "error", text: message });
+        showToast(message);
+        return false;
+      } finally {
+        setInventorySaveBusy(false);
+      }
+    },
+    [showToast],
+  );
+
+  const handleSaveManualGroup = useCallback(async () => {
+    const chatId = Number(manualGroupDraft.chatId.trim());
+    const chatTitle = manualGroupDraft.chatTitle.trim();
+    const chatType = manualGroupDraft.chatType.trim() || "group";
+
+    if (!Number.isFinite(chatId)) {
+      setStatus({ kind: "error", text: "Chat ID không hợp lệ." });
+      return;
+    }
+    if (!chatTitle) {
+      setStatus({ kind: "error", text: "Thiếu tên group." });
+      return;
+    }
+
+    const currentInventory = getCurrentInventory();
+    const nextGroups = [
+      ...currentInventory.groups.filter((group) => group.chatId !== chatId),
+      {
+        chatId,
+        chatTitle,
+        chatType,
+        photoFileId: null,
+        photoContentType: null,
+        photoDataBase64: null,
+        photoSyncedAt: null,
+      },
+    ];
+
+    const nextInventory = {
+      ...currentInventory,
+      groups: nextGroups,
+      updatedAt: new Date().toISOString(),
+    };
+
+    await persistInventory(nextInventory, `Đã lưu group ${chatTitle}`);
+  }, [getCurrentInventory, manualGroupDraft, persistInventory]);
+
+  const handleSaveManualTopic = useCallback(async () => {
+    const chatId = Number(manualTopicDraft.chatId.trim());
+    const threadId = Number(manualTopicDraft.threadId.trim());
+    const chatTitle = manualTopicDraft.chatTitle.trim();
+    const topicName = manualTopicDraft.topicName.trim();
+
+    if (!Number.isFinite(chatId)) {
+      setStatus({ kind: "error", text: "Chat ID topic không hợp lệ." });
+      return;
+    }
+    if (!Number.isFinite(threadId)) {
+      setStatus({ kind: "error", text: "Topic ID không hợp lệ." });
+      return;
+    }
+    if (!chatTitle || !topicName) {
+      setStatus({ kind: "error", text: "Thiếu tên group hoặc topic." });
+      return;
+    }
+
+    const currentInventory = getCurrentInventory();
+    const nextTopics = [
+      ...currentInventory.topics.filter((topic) => !(topic.chatId === chatId && topic.threadId === threadId)),
+      {
+        chatId,
+        threadId,
+        chatTitle,
+        topicName,
+      },
+    ];
+
+    const nextInventory = {
+      ...currentInventory,
+      topics: nextTopics,
+      updatedAt: new Date().toISOString(),
+    };
+
+    await persistInventory(nextInventory, `Đã lưu topic ${topicName}`);
+  }, [getCurrentInventory, manualTopicDraft, persistInventory]);
+
+  const handleDeleteManualGroup = useCallback(async (chatId: number) => {
+    const currentInventory = getCurrentInventory();
+    const nextInventory = {
+      ...currentInventory,
+      groups: currentInventory.groups.filter((group) => group.chatId !== chatId),
+      topics: currentInventory.topics.filter((topic) => topic.chatId !== chatId),
+      updatedAt: new Date().toISOString(),
+    };
+
+    await persistInventory(nextInventory, "Đã xóa group khỏi inventory");
+  }, [getCurrentInventory, persistInventory]);
+
+  const handleDeleteManualTopic = useCallback(async (chatId: number, threadId: number) => {
+    const currentInventory = getCurrentInventory();
+    const nextInventory = {
+      ...currentInventory,
+      topics: currentInventory.topics.filter((topic) => !(topic.chatId === chatId && topic.threadId === threadId)),
+      updatedAt: new Date().toISOString(),
+    };
+
+    await persistInventory(nextInventory, "Đã xóa topic khỏi inventory");
+  }, [getCurrentInventory, persistInventory]);
+
   const startWorkflow = useCallback(async () => {
     setRuntimeBusy(true);
     setStatus({ kind: "loading", text: "Starting local workflow" });
@@ -3233,49 +3376,6 @@ export default function TelegramFlowWorkbench() {
     }
   }, [deepScan, nodeConfigs, showToast, syncNodes, token]);
 
-  const refreshInventory = useCallback(async () => {
-    if (refreshBusy) {
-      return;
-    }
-
-    const trimmedToken = token.trim();
-    setRefreshBusy(true);
-    setStatus({ kind: "loading", text: "Refreshing inventory" });
-
-    try {
-      const response = await fetch("/api/local-workflow", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "refreshInventory",
-          token: trimmedToken || undefined,
-        }),
-      });
-
-      const payload = (await response.json()) as { ok: boolean; status?: RuntimeStatus; error?: string };
-
-      if (!response.ok || !payload.ok) {
-        throw new Error(payload.error || "Không refresh được inventory.");
-      }
-
-      if (payload.status) {
-        applyRuntimeStatus(payload.status);
-      }
-
-      snapshotRef.current = null;
-      setSnapshot(null);
-      await fetchWorkflow({ silent: true });
-      showToast("Inventory cache cleared");
-      setStatus({ kind: "success", text: "Inventory đã được refresh" });
-    } catch (error) {
-      const message = getCleanErrorMessage(error, "Không refresh được inventory.");
-      setStatus({ kind: "error", text: message });
-      showToast(message);
-    } finally {
-      setRefreshBusy(false);
-    }
-  }, [applyRuntimeStatus, fetchWorkflow, refreshBusy, showToast, token]);
-
   const syncAvatarCache = useCallback(async () => {
     if (avatarSyncBusy) {
       return;
@@ -3314,38 +3414,6 @@ export default function TelegramFlowWorkbench() {
     }
   }, [avatarSyncBusy, showToast, token]);
 
-  const openRefreshConfirm = useCallback(() => {
-    setRefreshConfirmDraft("");
-    setRefreshConfirmOpen(true);
-  }, []);
-
-  const closeRefreshConfirm = useCallback(() => {
-    if (refreshBusy) {
-      return;
-    }
-    setRefreshConfirmOpen(false);
-    setRefreshConfirmDraft("");
-  }, [refreshBusy]);
-
-  const confirmRefreshInventory = useCallback(async () => {
-    if (refreshBusy) {
-      return;
-    }
-
-    if (refreshConfirmDraft.trim().toUpperCase() !== "REFRESH") {
-      setStatus({ kind: "error", text: 'Gõ "REFRESH" để xác nhận.' });
-      return;
-    }
-
-    try {
-      await refreshInventory();
-      setRefreshConfirmOpen(false);
-      setRefreshConfirmDraft("");
-    } catch {
-      // refreshInventory already surfaces errors.
-    }
-  }, [refreshBusy, refreshConfirmDraft, refreshInventory]);
-
   const handleDeleteWebhook = useCallback(async () => {
     if (deleteBusy) {
       return;
@@ -3372,7 +3440,7 @@ export default function TelegramFlowWorkbench() {
 
       setStatus({ kind: "success", text: "Webhook off" });
       showToast("Webhook off");
-      await fetchWorkflow();
+      void refreshRuntimeStatus();
     } catch (error) {
       const message = getCleanErrorMessage(error, "Không tắt được webhook");
       setStatus({ kind: "error", text: message });
@@ -3380,7 +3448,7 @@ export default function TelegramFlowWorkbench() {
     } finally {
       setDeleteBusy(false);
     }
-  }, [deleteBusy, fetchWorkflow, showToast, token]);
+  }, [deleteBusy, refreshRuntimeStatus, showToast, token]);
 
   useEffect(() => {
     if (!hydrated || !autoPoll || workflowActive) {
@@ -3443,6 +3511,7 @@ export default function TelegramFlowWorkbench() {
 
   const inventoryGroupCount = runtimeStatus?.inventory.groups.length ?? 0;
   const inventoryTopicCount = runtimeStatus?.inventory.topics.length ?? 0;
+  const manualInventory = runtimeStatus?.inventory ?? { groups: [], topics: [], updatedAt: null };
   const workflowStateLabel = workflowActive ? "Active" : "Stopped";
   const workflowStateClass = workflowActive ? "text-emerald-300" : "text-rose-300";
   const runtimeHandled = runtimeStatus?.handledCount ?? 0;
@@ -3557,21 +3626,14 @@ export default function TelegramFlowWorkbench() {
               </button>
               <button
                 type="button"
-                onClick={openRefreshConfirm}
-                disabled={refreshBusy}
-                title="Refresh inventory"
+                onClick={openInventoryEditor}
+                title="Nhập tay inventory"
                 className={[
                   "flex h-9 w-9 items-center justify-center rounded-[6px] border transition disabled:cursor-not-allowed disabled:opacity-60",
-                  refreshBusy
-                    ? "border-sky-400/25 bg-sky-400/10 text-sky-200"
-                    : "border-white/10 bg-white/5 text-white/35 hover:bg-white/10 hover:text-white",
+                  "border-white/10 bg-white/5 text-white/35 hover:bg-white/10 hover:text-white",
                 ].join(" ")}
               >
-                {refreshBusy ? (
-                  <span className="text-[10px] font-medium text-white/55">...</span>
-                ) : (
-                  <ArrowPathIcon className="h-5 w-5" />
-                )}
+                <PencilSquareIcon className="h-5 w-5" />
               </button>
               <button
                 type="button"
@@ -3862,51 +3924,223 @@ export default function TelegramFlowWorkbench() {
         </div>
       ) : null}
 
-      <AlertDialog open={refreshConfirmOpen} onOpenChange={(open) => !open && closeRefreshConfirm()}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Xóa cache inventory và quét lại</AlertDialogTitle>
-            <AlertDialogDescription>
-              Thao tác này sẽ xóa cache group/topic hiện tại ngay lập tức, rồi quét lại Telegram để nạp dữ liệu mới.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
+      <Dialog open={inventoryEditorOpen} onOpenChange={(open) => !open && closeInventoryEditor()}>
+        <DialogContent className="!w-[min(60rem,calc(100vw-2rem))] !max-w-none overflow-hidden p-0">
+          <div className="space-y-4 p-4">
+            <DialogHeader>
+              <DialogTitle>Nhập tay group/topic</DialogTitle>
+              <DialogDescription>
+                Lưu trực tiếp vào database. Không scan Telegram, không đồng bộ tự động, tránh xung đột dữ liệu.
+              </DialogDescription>
+            </DialogHeader>
 
-          <div className="rounded-[8px] border border-amber-400/20 bg-amber-400/10 px-3 py-2 text-[12px] leading-5 text-amber-50/90">
-            Thao tác này sẽ xóa cache group/topic hiện tại ngay lập tức, rồi quét lại Telegram để nạp dữ liệu mới.
+            <div className="grid gap-4 lg:grid-cols-[1fr_1fr]">
+              <Card className="border-white/10 bg-white/5">
+                <CardHeader className="space-y-1 p-4 pb-3">
+                  <CardTitle className="text-sm text-white">Group</CardTitle>
+                  <CardDescription className="text-[11px] text-white/45">Nhập tay thông tin group chat.</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-3 p-4 pt-0">
+                  <div className="grid gap-3 sm:grid-cols-[120px_1fr]">
+                    <div className="space-y-1">
+                      <div className="text-[10px] uppercase tracking-[0.22em] text-white/35">Chat ID</div>
+                      <Input
+                        value={manualGroupDraft.chatId}
+                        onChange={(event) => setManualGroupDraft((current) => ({ ...current, chatId: event.target.value }))}
+                        placeholder="-100123456789"
+                        className="h-9 bg-[#101113]"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <div className="text-[10px] uppercase tracking-[0.22em] text-white/35">Tên group</div>
+                      <Input
+                        value={manualGroupDraft.chatTitle}
+                        onChange={(event) => setManualGroupDraft((current) => ({ ...current, chatTitle: event.target.value }))}
+                        placeholder="Dự án Test"
+                        className="h-9 bg-[#101113]"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <div className="text-[10px] uppercase tracking-[0.22em] text-white/35">Loại chat</div>
+                    <Select
+                      value={manualGroupDraft.chatType}
+                      onValueChange={(value) => setManualGroupDraft((current) => ({ ...current, chatType: String(value) }))}
+                    >
+                      <SelectTrigger className="h-9 w-full bg-[#101113]">
+                        <SelectValue placeholder="group" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="group">group</SelectItem>
+                        <SelectItem value="supergroup">supergroup</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <Button
+                    type="button"
+                    onClick={() => void handleSaveManualGroup()}
+                    disabled={inventorySaveBusy}
+                    className="h-9 w-full"
+                  >
+                    {inventorySaveBusy ? "Đang lưu..." : "Lưu group"}
+                  </Button>
+                </CardContent>
+              </Card>
+
+              <Card className="border-white/10 bg-white/5">
+                <CardHeader className="space-y-1 p-4 pb-3">
+                  <CardTitle className="text-sm text-white">Topic</CardTitle>
+                  <CardDescription className="text-[11px] text-white/45">Nhập tay topic theo group tương ứng.</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-3 p-4 pt-0">
+                  <div className="grid gap-3 sm:grid-cols-[120px_1fr]">
+                    <div className="space-y-1">
+                      <div className="text-[10px] uppercase tracking-[0.22em] text-white/35">Chat ID</div>
+                      <Input
+                        value={manualTopicDraft.chatId}
+                        onChange={(event) => setManualTopicDraft((current) => ({ ...current, chatId: event.target.value }))}
+                        placeholder="-100123456789"
+                        className="h-9 bg-[#101113]"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <div className="text-[10px] uppercase tracking-[0.22em] text-white/35">Topic ID</div>
+                      <Input
+                        value={manualTopicDraft.threadId}
+                        onChange={(event) => setManualTopicDraft((current) => ({ ...current, threadId: event.target.value }))}
+                        placeholder="123"
+                        className="h-9 bg-[#101113]"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="space-y-1">
+                      <div className="text-[10px] uppercase tracking-[0.22em] text-white/35">Tên group</div>
+                      <Input
+                        value={manualTopicDraft.chatTitle}
+                        onChange={(event) => setManualTopicDraft((current) => ({ ...current, chatTitle: event.target.value }))}
+                        placeholder="Dự án Test"
+                        className="h-9 bg-[#101113]"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <div className="text-[10px] uppercase tracking-[0.22em] text-white/35">Tên topic</div>
+                      <Input
+                        value={manualTopicDraft.topicName}
+                        onChange={(event) => setManualTopicDraft((current) => ({ ...current, topicName: event.target.value }))}
+                        placeholder="Vật tư chính"
+                        className="h-9 bg-[#101113]"
+                      />
+                    </div>
+                  </div>
+
+                  <Button
+                    type="button"
+                    onClick={() => void handleSaveManualTopic()}
+                    disabled={inventorySaveBusy}
+                    className="h-9 w-full"
+                  >
+                    {inventorySaveBusy ? "Đang lưu..." : "Lưu topic"}
+                  </Button>
+                </CardContent>
+              </Card>
+            </div>
+
+            <Card className="border-white/10 bg-white/5">
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 p-4 pb-3">
+                <div>
+                  <CardTitle className="text-sm text-white">Inventory đã lưu</CardTitle>
+                  <CardDescription className="text-[11px] text-white/45">
+                    {formatNumber(manualInventory.groups.length)} group / {formatNumber(manualInventory.topics.length)} topic
+                  </CardDescription>
+                </div>
+                <div className="text-[10px] uppercase tracking-[0.22em] text-white/35">
+                  Lưu thẳng vào DB
+                </div>
+              </CardHeader>
+              <Separator className="bg-white/10" />
+              <CardContent className="p-4 pt-3">
+                <ScrollArea className="h-[280px] pr-3">
+                  <div className="space-y-3">
+                    {manualInventory.groups.length === 0 ? (
+                      <div className="rounded-[8px] border border-dashed border-white/10 bg-[#101113] px-3 py-4 text-[12px] text-white/45">
+                        Chưa có group nào được lưu tay.
+                      </div>
+                    ) : (
+                      manualInventory.groups.map((group) => {
+                        const groupTopics = manualInventory.topics.filter((topic) => topic.chatId === group.chatId);
+
+                        return (
+                          <div key={group.chatId} className="rounded-[8px] border border-white/10 bg-[#101113] p-3">
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <div className="truncate text-[13px] font-medium text-white">{group.chatTitle}</div>
+                                <div className="mt-0.5 text-[10px] text-white/45">
+                                  {group.chatType} · {group.chatId}
+                                </div>
+                              </div>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon-sm"
+                                onClick={() => void handleDeleteManualGroup(group.chatId)}
+                                className="text-rose-300 hover:bg-rose-400/10 hover:text-rose-200"
+                                disabled={inventorySaveBusy}
+                                title="Xóa group"
+                              >
+                                <XMarkIcon aria-hidden="true" className="h-4 w-4" />
+                              </Button>
+                            </div>
+
+                            <div className="mt-3 space-y-2">
+                              {groupTopics.length === 0 ? (
+                                <div className="rounded-[6px] border border-white/10 bg-white/5 px-3 py-2 text-[11px] text-white/45">
+                                  Chưa có topic nào.
+                                </div>
+                              ) : (
+                                groupTopics.map((topic) => (
+                                  <div
+                                    key={`${topic.chatId}:${topic.threadId}`}
+                                    className="flex items-center justify-between gap-3 rounded-[6px] border border-white/10 bg-white/5 px-3 py-2"
+                                  >
+                                    <div className="min-w-0">
+                                      <div className="truncate text-[12px] text-white">{topic.topicName}</div>
+                                      <div className="mt-0.5 text-[10px] text-white/45">Topic ID: {topic.threadId}</div>
+                                    </div>
+                                    <Button
+                                      type="button"
+                                      variant="ghost"
+                                      size="icon-sm"
+                                      onClick={() => void handleDeleteManualTopic(topic.chatId, topic.threadId)}
+                                      className="text-rose-300 hover:bg-rose-400/10 hover:text-rose-200"
+                                      disabled={inventorySaveBusy}
+                                      title="Xóa topic"
+                                    >
+                                      <XMarkIcon aria-hidden="true" className="h-4 w-4" />
+                                    </Button>
+                                  </div>
+                                ))
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </ScrollArea>
+              </CardContent>
+            </Card>
           </div>
-
-          <div className="space-y-2">
-            <div className="text-[10px] uppercase tracking-[0.22em] text-muted-foreground">Nhập xác nhận</div>
-            <Input
-              autoFocus
-              value={refreshConfirmDraft}
-              onChange={(event) => setRefreshConfirmDraft(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Escape") {
-                  event.preventDefault();
-                  closeRefreshConfirm();
-                }
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  void confirmRefreshInventory();
-                }
-              }}
-              placeholder='Gõ "REFRESH"'
-            />
-          </div>
-
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={refreshBusy}>Hủy</AlertDialogCancel>
-            <AlertDialogAction
-              disabled={refreshBusy || refreshConfirmDraft.trim().toUpperCase() !== "REFRESH"}
-              onClick={() => void confirmRefreshInventory()}
-              className="bg-rose-500 text-white hover:bg-rose-500/90"
-            >
-              {refreshBusy ? "Đang refresh..." : "Xóa cache và refresh"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+          <DialogFooter className="border-t border-white/10 bg-white/5 px-4 py-3">
+            <Button type="button" variant="outline" onClick={() => setInventoryEditorOpen(false)} disabled={inventorySaveBusy}>
+              Đóng
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </main>
   );
 }
@@ -4006,7 +4240,7 @@ function AllowedTopicPicker({
   selectedCount,
   hasSnapshot,
   avatarRefreshKey,
-  onRequireTopics,
+  onOpenManualInventory,
   onChange,
   onSelectAll,
   onClear,
@@ -4016,7 +4250,7 @@ function AllowedTopicPicker({
   selectedCount: number;
   hasSnapshot: boolean;
   avatarRefreshKey: number;
-  onRequireTopics?: () => void;
+  onOpenManualInventory?: () => void;
   onChange: (topics: AllowedTopicSelection[]) => void;
   onSelectAll: () => void;
   onClear: () => void;
@@ -4024,7 +4258,6 @@ function AllowedTopicPicker({
   const selectedKeys = new Set(selectedTopics.map(topicKey));
   const groups = groupTopics(topics);
   const [open, setOpen] = useState(false);
-  const requestedTopicsRef = useRef(false);
 
   function toggleTopic(topic: AllowedTopicSelection) {
     const key = topicKey(topic);
@@ -4050,20 +4283,6 @@ function AllowedTopicPicker({
     onChange(next);
   }
 
-  useEffect(() => {
-    if (!open) {
-      requestedTopicsRef.current = false;
-      return;
-    }
-
-    if (topics.length > 0 || requestedTopicsRef.current) {
-      return;
-    }
-
-    requestedTopicsRef.current = true;
-    onRequireTopics?.();
-  }, [open, onRequireTopics, topics.length]);
-
   return (
     <div className="rounded-[6px] border border-white/10 bg-white/5 p-3">
       <div className="flex items-start justify-between gap-3">
@@ -4086,7 +4305,16 @@ function AllowedTopicPicker({
 
       {!hasSnapshot ? (
         <div className="mt-3 rounded-[6px] border border-amber-300/15 bg-amber-300/8 px-3 py-2 text-[11px] leading-5 text-amber-100/80">
-          Scan bot để lấy group/topic hiện có.
+          Chưa có dữ liệu group/topic. Nhập tay để lưu vào database.
+          {onOpenManualInventory ? (
+            <button
+              type="button"
+              onClick={onOpenManualInventory}
+              className="ml-2 inline-flex items-center rounded-full border border-amber-200/25 bg-amber-200/10 px-2 py-0.5 text-[10px] font-medium text-amber-50 hover:bg-amber-200/15"
+            >
+              Nhập tay
+            </button>
+          ) : null}
         </div>
       ) : null}
       <CommandDialog
@@ -4210,7 +4438,7 @@ function TopicTargetPicker({
   mode,
   hasSnapshot,
   avatarRefreshKey,
-  onRequireTopics,
+  onOpenManualInventory,
   onChange,
   onClear,
   onModeChange,
@@ -4220,7 +4448,7 @@ function TopicTargetPicker({
   mode: TargetRoutingMode;
   hasSnapshot: boolean;
   avatarRefreshKey: number;
-  onRequireTopics?: () => void;
+  onOpenManualInventory?: () => void;
   onChange: (topic: AllowedTopicSelection) => void;
   onClear: () => void;
   onModeChange: (mode: TargetRoutingMode) => void;
@@ -4228,7 +4456,6 @@ function TopicTargetPicker({
   const selectedKey = value ? topicKey(value) : null;
   const groups = buildTopicPickerGroups(topics);
   const [open, setOpen] = useState(false);
-  const requestedTopicsRef = useRef(false);
 
   function chooseTopic(topic: AllowedTopicSelection) {
     const key = topicKey(topic);
@@ -4240,20 +4467,6 @@ function TopicTargetPicker({
   }
 
   const selectionLabel = value ? formatTopicSelectionLabel(value) : "Chưa chọn";
-
-  useEffect(() => {
-    if (!open) {
-      requestedTopicsRef.current = false;
-      return;
-    }
-
-    if (topics.length > 0 || requestedTopicsRef.current) {
-      return;
-    }
-
-    requestedTopicsRef.current = true;
-    onRequireTopics?.();
-  }, [open, onRequireTopics, topics.length]);
 
   return (
     <div className="rounded-[6px] border border-white/10 bg-white/5 p-3">
@@ -4305,7 +4518,16 @@ function TopicTargetPicker({
 
       {!hasSnapshot ? (
         <div className="mt-3 rounded-[6px] border border-amber-300/15 bg-amber-300/8 px-3 py-2 text-[11px] leading-5 text-amber-100/80">
-          Scan bot để lấy group/topic hiện có.
+          Chưa có dữ liệu group/topic. Nhập tay để lưu vào database.
+          {onOpenManualInventory ? (
+            <button
+              type="button"
+              onClick={onOpenManualInventory}
+              className="ml-2 inline-flex items-center rounded-full border border-amber-200/25 bg-amber-200/10 px-2 py-0.5 text-[10px] font-medium text-amber-50 hover:bg-amber-200/15"
+            >
+              Nhập tay
+            </button>
+          ) : null}
         </div>
       ) : mode === "previous" ? (
         <div className="mt-3 rounded-[6px] border border-sky-300/15 bg-sky-300/8 px-3 py-2 text-[11px] leading-5 text-sky-100/80">

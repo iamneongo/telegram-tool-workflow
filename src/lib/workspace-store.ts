@@ -84,7 +84,7 @@ function createDefaultWorkspaceUi(): WorkspaceUiState {
   return {
     token: "",
     deepScan: true,
-    autoPoll: true,
+    autoPoll: false,
     settingsOpen: false,
     configOpen: false,
     configPanelTab: "target",
@@ -306,15 +306,11 @@ function mergeWorkspaceRecord(current: WorkspaceRecord, patch: WorkspaceRecordPa
     ...(patch.inventory ?? {}),
   };
 
-  const nextInventory: WorkflowInventory = patch.ui?.snapshot
-    ? deriveInventoryFromSnapshot(nextUi.snapshot, current.inventory) ?? inventoryBase
-    : inventoryBase;
-
   return {
     version: 1 as const,
     updatedAt: new Date().toISOString(),
     ui: nextUi,
-    inventory: nextInventory,
+    inventory: inventoryBase,
   };
 }
 

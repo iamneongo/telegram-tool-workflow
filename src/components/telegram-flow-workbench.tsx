@@ -49,6 +49,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { TelegramWorkflowSnapshot } from "@/lib/telegram";
 import type { WorkspaceRecord, WorkspaceRecordPatch } from "@/lib/workspace-store";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
@@ -1771,6 +1772,12 @@ export default function TelegramFlowWorkbench() {
     chatTitle: "",
     topicName: "",
   });
+  const [deleteInventoryConfirmOpen, setDeleteInventoryConfirmOpen] = useState(false);
+  const [pendingInventoryDelete, setPendingInventoryDelete] = useState<
+    | { kind: "group"; chatId: number; label: string }
+    | { kind: "topic"; chatId: number; threadId: number; label: string }
+    | null
+  >(null);
   const [isFetching, setIsFetching] = useState(false);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [snapshot, setSnapshot] = useState<TelegramWorkflowSnapshot | null>(null);
@@ -3153,6 +3160,37 @@ export default function TelegramFlowWorkbench() {
     await persistInventory(nextInventory, "Đã xóa topic khỏi inventory");
   }, [getCurrentInventory, persistInventory]);
 
+  const requestDeleteInventoryItem = useCallback((item: NonNullable<typeof pendingInventoryDelete>) => {
+    setPendingInventoryDelete(item);
+    setDeleteInventoryConfirmOpen(true);
+  }, []);
+
+  const closeDeleteInventoryConfirm = useCallback(() => {
+    if (inventorySaveBusy) {
+      return;
+    }
+    setDeleteInventoryConfirmOpen(false);
+    setPendingInventoryDelete(null);
+  }, [inventorySaveBusy]);
+
+  const confirmDeleteInventoryItem = useCallback(async () => {
+    if (!pendingInventoryDelete || inventorySaveBusy) {
+      return;
+    }
+
+    try {
+      if (pendingInventoryDelete.kind === "group") {
+        await handleDeleteManualGroup(pendingInventoryDelete.chatId);
+      } else {
+        await handleDeleteManualTopic(pendingInventoryDelete.chatId, pendingInventoryDelete.threadId);
+      }
+      setDeleteInventoryConfirmOpen(false);
+      setPendingInventoryDelete(null);
+    } catch {
+      // Error already surfaced by persistInventory.
+    }
+  }, [handleDeleteManualGroup, handleDeleteManualTopic, inventorySaveBusy, pendingInventoryDelete]);
+
   const startWorkflow = useCallback(async () => {
     setRuntimeBusy(true);
     setStatus({ kind: "loading", text: "Starting local workflow" });
@@ -3924,6 +3962,36 @@ export default function TelegramFlowWorkbench() {
         </div>
       ) : null}
 
+      <AlertDialog open={deleteInventoryConfirmOpen} onOpenChange={(open) => !open && closeDeleteInventoryConfirm()}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Xác nhận xóa</AlertDialogTitle>
+            <AlertDialogDescription>
+              {pendingInventoryDelete?.kind === "group"
+                ? `Xóa group "${pendingInventoryDelete.label}" sẽ xóa luôn toàn bộ topic bên trong.`
+                : pendingInventoryDelete?.kind === "topic"
+                  ? `Xóa topic "${pendingInventoryDelete.label}" khỏi inventory.`
+                  : "Xác nhận thao tác xóa."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+
+          <div className="rounded-[8px] border border-rose-400/20 bg-rose-400/10 px-3 py-2 text-[12px] leading-5 text-rose-50/90">
+            Thao tác này không thể hoàn tác ngay lập tức.
+          </div>
+
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={inventorySaveBusy}>Hủy</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={inventorySaveBusy || !pendingInventoryDelete}
+              onClick={() => void confirmDeleteInventoryItem()}
+              className="bg-rose-500 text-white hover:bg-rose-500/90"
+            >
+              {inventorySaveBusy ? "Đang xóa..." : "Xóa"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       <Dialog open={inventoryEditorOpen} onOpenChange={(open) => !open && closeInventoryEditor()}>
         <DialogContent className="!w-[min(60rem,calc(100vw-2rem))] !max-w-none overflow-hidden p-0">
           <div className="space-y-4 p-4">
@@ -4086,7 +4154,7 @@ export default function TelegramFlowWorkbench() {
                                 type="button"
                                 variant="ghost"
                                 size="icon-sm"
-                                onClick={() => void handleDeleteManualGroup(group.chatId)}
+                                onClick={() => requestDeleteInventoryItem({ kind: "group", chatId: group.chatId, label: group.chatTitle })}
                                 className="text-rose-300 hover:bg-rose-400/10 hover:text-rose-200"
                                 disabled={inventorySaveBusy}
                                 title="Xóa group"
@@ -4114,7 +4182,14 @@ export default function TelegramFlowWorkbench() {
                                       type="button"
                                       variant="ghost"
                                       size="icon-sm"
-                                      onClick={() => void handleDeleteManualTopic(topic.chatId, topic.threadId)}
+                                      onClick={() =>
+                                        requestDeleteInventoryItem({
+                                          kind: "topic",
+                                          chatId: topic.chatId,
+                                          threadId: topic.threadId,
+                                          label: topic.topicName,
+                                        })
+                                      }
                                       className="text-rose-300 hover:bg-rose-400/10 hover:text-rose-200"
                                       disabled={inventorySaveBusy}
                                       title="Xóa topic"

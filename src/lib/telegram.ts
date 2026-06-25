@@ -6,6 +6,18 @@ export type TelegramChat = {
   last_name?: string;
   username?: string;
   is_forum?: boolean;
+  photo?: TelegramChatPhoto;
+};
+
+type TelegramChatPhoto = {
+  small_file_id?: string;
+  small_file_unique_id?: string;
+  big_file_id?: string;
+  big_file_unique_id?: string;
+};
+
+type TelegramChatFullInfo = TelegramChat & {
+  photo?: TelegramChatPhoto;
 };
 
 export type TelegramUser = {
@@ -107,6 +119,7 @@ export type GroupRecord = {
   lastSeenAt: string | null;
   lastUpdateId: number;
   sources: string[];
+  photoFileId?: string | null;
 };
 
 export type TopicRecord = {
@@ -153,7 +166,7 @@ export type TelegramWorkflowSnapshot = {
   bot: TelegramBotInfo;
   webhook: TelegramWebhookInfo;
   updates: TelegramWorkflowRow[];
-  groups: { chatId: number; chatTitle: string; chatType: string }[];
+  groups: { chatId: number; chatTitle: string; chatType: string; photoFileId?: string | null }[];
   topics: { chatId: number; threadId: number; chatTitle: string; topicName: string }[];
   warnings: string[];
   meta: {
@@ -292,6 +305,69 @@ export async function telegramRequest<T>(
   }
 
   return data.result;
+}
+
+async function resolveChatPhoto(token: string, chatId: number) {
+  try {
+    const chat = await telegramRequest<TelegramChatFullInfo>(token, "getChat", { chat_id: chatId });
+    const photoFileId = chat.photo?.big_file_id ?? chat.photo?.small_file_id ?? null;
+    console.log("[telegram-photo] getChat", {
+      chatId,
+      hasPhoto: Boolean(chat.photo),
+      photo: chat.photo
+        ? {
+            small_file_id: chat.photo.small_file_id ?? null,
+            big_file_id: chat.photo.big_file_id ?? null,
+          }
+        : null,
+      resolvedPhotoFileId: photoFileId,
+    });
+    if (!photoFileId) {
+      return { photoFileId: null };
+    }
+
+    return { photoFileId };
+  } catch {
+    return { photoFileId: null };
+  }
+}
+
+async function mapWithConcurrency<TInput, TOutput>(
+  items: TInput[],
+  concurrency: number,
+  mapper: (item: TInput, index: number) => Promise<TOutput>,
+) {
+  if (items.length === 0) {
+    return [];
+  }
+
+  const limit = Math.max(1, Math.min(concurrency, items.length));
+  const results = new Array<TOutput>(items.length);
+  let cursor = 0;
+
+  async function worker() {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      results[index] = await mapper(items[index], index);
+    }
+  }
+
+  await Promise.all(Array.from({ length: limit }, () => worker()));
+  return results;
+}
+
+async function enrichGroupsWithPhotos(
+  token: string,
+  groups: { chatId: number; chatTitle: string; chatType: string; photoFileId?: string | null }[],
+) {
+  return mapWithConcurrency(groups, 4, async (group) => {
+    const { photoFileId } = await resolveChatPhoto(token, group.chatId);
+    return {
+      ...group,
+      photoFileId,
+    };
+  });
 }
 
 function mergeGroupRecord(
@@ -556,7 +632,7 @@ export async function fetchUpdatesBatch(token: string, offset?: number) {
 }
 
 function buildUniqueChats(rows: TelegramWorkflowRow[]) {
-  const chats = new Map<number, { chatId: number; chatTitle: string; chatType: string }>();
+  const chats = new Map<number, { chatId: number; chatTitle: string; chatType: string; photoFileId?: string | null }>();
   for (const row of rows) {
     if (row.chatId == null) {
       continue;
@@ -698,7 +774,7 @@ export async function scanTelegramWorkflow(token: string, options: ScanOptions =
     warnings.add(`Telegram đang giữ ${webhook.pending_update_count} update chưa xử lý.`);
   }
 
-  const uniqueChats = buildUniqueChats(rows);
+  const uniqueChats = await enrichGroupsWithPhotos(token, buildUniqueChats(rows));
   const uniqueTopics = buildUniqueTopics(rows);
 
   return {
@@ -717,7 +793,7 @@ export async function scanTelegramWorkflow(token: string, options: ScanOptions =
       topicCount: uniqueTopics.length,
     },
   } satisfies TelegramWorkflowSnapshot & {
-    groups: { chatId: number; chatTitle: string; chatType: string }[];
+    groups: { chatId: number; chatTitle: string; chatType: string; photoFileId?: string | null }[];
     topics: { chatId: number; threadId: number; chatTitle: string; topicName: string }[];
   };
 }
@@ -782,10 +858,20 @@ export async function scanTelegramBot(token: string, options: ScanOptions = {}) 
     warnings.add(`Telegram đang giữ ${webhook.pending_update_count} update chưa xử lý.`);
   }
 
+  const uniqueChats = await enrichGroupsWithPhotos(
+    token,
+    Array.from(groups.values()).sort((a, b) => a.title.localeCompare(b.title)).map((group) => ({
+      chatId: group.chatId,
+      chatTitle: group.title,
+      chatType: group.type,
+      photoFileId: group.photoFileId ?? null,
+    })),
+  );
+
   return {
     bot,
     webhook,
-    groups: Array.from(groups.values()).sort((a, b) => a.title.localeCompare(b.title)),
+    groups: uniqueChats,
     topics: Array.from(topics.values()).sort((a, b) => {
       if (a.chatTitle === b.chatTitle) {
         return a.threadId - b.threadId;

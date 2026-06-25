@@ -4,7 +4,7 @@ import type { TelegramWorkflowSnapshot } from "@/lib/telegram";
 type JsonRecord = Record<string, unknown>;
 
 export type WorkflowInventory = {
-  groups: { chatId: number; chatTitle: string; chatType: string }[];
+  groups: { chatId: number; chatTitle: string; chatType: string; photoFileId?: string | null }[];
   topics: { chatId: number; threadId: number; chatTitle: string; topicName: string }[];
   updatedAt: string | null;
 };
@@ -117,9 +117,17 @@ function sanitizeInventory(raw: unknown): WorkflowInventory {
             chatId,
             chatTitle: String(item.chatTitle || `Chat ${chatId}`),
             chatType: String(item.chatType || "group"),
+            photoFileId: typeof item.photoFileId === "string" ? item.photoFileId : item.photoFileId === null ? null : undefined,
           };
         })
-        .filter((item): item is { chatId: number; chatTitle: string; chatType: string } => Boolean(item))
+        .filter(
+          (item): item is {
+            chatId: number;
+            chatTitle: string;
+            chatType: string;
+            photoFileId: string | null | undefined;
+          } => Boolean(item),
+        )
     : fallback.groups;
 
   const topics = Array.isArray(raw.topics)
@@ -216,6 +224,7 @@ function deriveInventoryFromSnapshot(snapshot: TelegramWorkflowSnapshot | null |
       chatId: group.chatId,
       chatTitle: group.chatTitle,
       chatType: group.chatType,
+      photoFileId: group.photoFileId ?? null,
     })),
     topics: snapshot.topics.map((topic) => ({
       chatId: topic.chatId,

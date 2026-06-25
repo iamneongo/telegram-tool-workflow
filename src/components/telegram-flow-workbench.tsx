@@ -14,6 +14,7 @@ import {
   CheckCircleIcon,
   ChevronDownIcon,
   ChevronRightIcon,
+  PlusIcon,
   PaperAirplaneIcon,
   PencilSquareIcon,
   PlayIcon,
@@ -47,6 +48,7 @@ import type { WorkspaceRecord, WorkspaceRecordPatch } from "@/lib/workspace-stor
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Command, CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -174,7 +176,7 @@ type RuntimeStatus = {
   }>;
   allowedTopics: AllowedTopicSelection[];
   inventory: {
-    groups: { chatId: number; chatTitle: string; chatType: string }[];
+    groups: { chatId: number; chatTitle: string; chatType: string; photoFileId?: string | null }[];
     topics: { chatId: number; threadId: number; chatTitle: string; topicName: string }[];
     updatedAt: string | null;
   };
@@ -3646,6 +3648,82 @@ function MetaBox({ label, value, valueClassName = "text-white/75" }: { label: st
   );
 }
 
+function GroupAvatar({ title, chatId }: { title: string; chatId: number }) {
+  const [imageSrc, setImageSrc] = useState<string | null>(null);
+  const cleanTitle = title.trim();
+  const fallback = cleanTitle ? cleanTitle.charAt(0).toUpperCase() : "G";
+
+  useEffect(() => {
+    let objectUrl: string | null = null;
+    let cancelled = false;
+
+    async function loadAvatar() {
+      const endpoint = `/api/telegram/chat-photo?chatId=${chatId}`;
+      console.log("[chat-photo][browser] fetch start", {
+        chatId,
+        title: cleanTitle,
+        endpoint,
+      });
+
+      try {
+        const response = await fetch(endpoint, { cache: "no-store" });
+
+        const source = response.headers.get("x-chat-photo-source") ?? "unknown";
+        const reason = response.headers.get("x-chat-photo-reason") ?? "none";
+        const fileId = response.headers.get("x-chat-photo-file-id") ?? "";
+        const filePath = response.headers.get("x-chat-photo-file-path") ?? "";
+        const contentType = response.headers.get("content-type") ?? "unknown";
+
+        console.log("[chat-photo][browser] fetch result", {
+          chatId,
+          title: cleanTitle,
+          ok: response.ok,
+          status: response.status,
+          source,
+          reason,
+          fileId,
+          filePath,
+          contentType,
+        });
+
+        const blob = await response.blob();
+        objectUrl = URL.createObjectURL(blob);
+        if (!cancelled) {
+          setImageSrc(objectUrl);
+        }
+      } catch (error) {
+        console.log("[chat-photo][browser] fetch error", {
+          chatId,
+          title: cleanTitle,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        if (!cancelled) {
+          setImageSrc(null);
+        }
+      }
+    }
+
+    void loadAvatar();
+
+    return () => {
+      cancelled = true;
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
+    };
+  }, [chatId, cleanTitle]);
+
+  return (
+    <div className="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-full border border-white/10 bg-white/5 text-[11px] font-semibold text-white/70">
+      {imageSrc ? (
+        <img src={imageSrc} alt="" className="size-full object-cover" />
+      ) : (
+        <span>{fallback}</span>
+      )}
+    </div>
+  );
+}
+
 function AllowedTopicPicker({
   topics,
   selectedTopics,
@@ -3665,30 +3743,12 @@ function AllowedTopicPicker({
 }) {
   const selectedKeys = new Set(selectedTopics.map(topicKey));
   const groups = groupTopics(topics);
-  const [openGroupIds, setOpenGroupIds] = useState<Set<number>>(() => {
-    const initial = new Set<number>();
-    for (const topic of selectedTopics) {
-      initial.add(topic.chatId);
-    }
-    return initial;
-  });
+  const [open, setOpen] = useState(false);
 
   function toggleTopic(topic: AllowedTopicSelection) {
     const key = topicKey(topic);
     const exists = selectedKeys.has(key);
     onChange(exists ? selectedTopics.filter((item) => topicKey(item) !== key) : [...selectedTopics, topic]);
-  }
-
-  function toggleGroupOpen(chatId: number) {
-    setOpenGroupIds((current) => {
-      const next = new Set(current);
-      if (next.has(chatId)) {
-        next.delete(chatId);
-      } else {
-        next.add(chatId);
-      }
-      return next;
-    });
   }
 
   function toggleGroup(groupTopicsList: AllowedTopicSelection[]) {
@@ -3711,26 +3771,21 @@ function AllowedTopicPicker({
 
   return (
     <div className="rounded-[6px] border border-white/10 bg-white/5 p-3">
-      <div className="flex items-center justify-between gap-3">
-        <div>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
           <div className="text-[10px] uppercase tracking-[0.22em] text-white/35">Group chat / topic</div>
           <div className="mt-1 text-[12px] text-white/72">{formatNumber(selectedCount)} topic chọn</div>
         </div>
-        <div className="flex gap-1.5">
-          <button
-            type="button"
-            onClick={onSelectAll}
-            className="h-8 rounded-[6px] border border-white/10 bg-white/10 px-2.5 text-[11px] text-white/75 transition hover:bg-white/5"
-          >
+        <div className="flex shrink-0 gap-1.5">
+          <Button type="button" variant="default" size="sm" onClick={() => setOpen(true)} className="h-8 px-2.5 text-[11px]">
+            Thêm
+          </Button>
+          <Button type="button" variant="outline" size="sm" onClick={onSelectAll} className="h-8 px-2.5 text-[11px]">
             All
-          </button>
-          <button
-            type="button"
-            onClick={onClear}
-            className="h-8 rounded-[6px] border border-white/10 bg-white/10 px-2.5 text-[11px] text-white/75 transition hover:bg-white/5"
-          >
+          </Button>
+          <Button type="button" variant="outline" size="sm" onClick={onClear} className="h-8 px-2.5 text-[11px]">
             Clear
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -3739,85 +3794,90 @@ function AllowedTopicPicker({
           Scan bot để lấy group/topic hiện có.
         </div>
       ) : null}
+      <CommandDialog
+        open={open}
+        onOpenChange={setOpen}
+        title="Chọn group/topic"
+        description="Tìm group hoặc topic rồi bấm Add để thêm vào workflow."
+        className="!h-[min(68vh,calc(100vh-2rem))] !max-h-[min(68vh,calc(100vh-2rem))] !w-[min(42rem,calc(100%-2rem))] !max-w-none overflow-hidden p-0"
+        showCloseButton
+      >
+        <Command className="h-full min-h-0 bg-background text-foreground">
+          <CommandInput placeholder="Tìm group hoặc topic..." />
+          <CommandList className="min-h-0 flex-1 overflow-y-auto">
+            <CommandEmpty>Không tìm thấy kết quả.</CommandEmpty>
 
-      <div className="mt-3 max-h-72 overflow-auto pr-2">
-        <div className="space-y-2">
-        {groups.length === 0 ? (
-          <div className="rounded-[6px] border border-white/10 bg-white/5 px-3 py-3 text-[12px] text-white/35">
-            Chưa có group/topic.
-          </div>
-        ) : null}
+            {groups.map((group) => {
+              const groupSelectedCount = group.topics.filter((topic) => selectedKeys.has(topicKey(topic))).length;
+              const groupItem = topics.find((topic) => topic.chatId === group.chatId && topic.threadId === null) ?? null;
+              const groupSelected = groupItem ? selectedKeys.has(topicKey(groupItem)) : false;
 
-        {groups.map((group) => {
-          const groupSelectedCount = group.topics.filter((topic) => selectedKeys.has(topicKey(topic))).length;
-          const allSelected = groupSelectedCount === group.topics.length && group.topics.length > 0;
-          const isOpen = openGroupIds.has(group.chatId);
-
-          return (
-            <div key={group.chatId} className="overflow-hidden rounded-[6px] border border-white/10 bg-[#101113]">
-              <div className="flex items-stretch gap-0">
-                <button
-                  type="button"
-                  onClick={() => toggleGroup(group.topics)}
-                  className={[
-                    "min-w-0 flex-1 px-3 py-2 text-left transition",
-                    allSelected ? "bg-emerald-400/10" : "bg-white/5 hover:bg-white/10",
-                  ].join(" ")}
+              return (
+                <CommandGroup
+                  key={group.chatId}
+                  heading={`${group.chatTitle} · ${formatNumber(groupSelectedCount)}/${formatNumber(group.topics.length)} topic`}
                 >
-                  <span className="block truncate text-[12px] font-medium text-white">{group.chatTitle}</span>
-                  <span className="block text-[10px] text-white/35">
-                    {formatNumber(groupSelectedCount)}/{formatNumber(group.topics.length)}
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => toggleGroupOpen(group.chatId)}
-                  className={[
-                    "flex w-10 shrink-0 items-center justify-center border-l border-white/10 transition",
-                    isOpen ? "bg-white/10 text-white/80" : "bg-white/5 text-white/35 hover:bg-white/10 hover:text-white/75",
-                  ].join(" ")}
-                  aria-label={isOpen ? "Thu gọn nhóm" : "Mở nhóm"}
-                >
-                  {isOpen ? <ChevronDownIcon aria-hidden="true" className="h-4 w-4" /> : <ChevronRightIcon aria-hidden="true" className="h-4 w-4" />}
-                </button>
-              </div>
+                  {groupItem ? (
+                    <CommandItem
+                      value={`${group.chatTitle} all messages group`}
+                      onSelect={() => toggleTopic(groupItem)}
+                      className="flex items-center justify-between gap-3 rounded-md bg-muted/40"
+                    >
+                      <div className="flex min-w-0 flex-1 items-center gap-2.5">
+                        <GroupAvatar title={group.chatTitle} chatId={group.chatId} />
+                        <div className="min-w-0">
+                          <div className="truncate text-[12px] font-medium text-foreground">All messages</div>
+                          <div className="text-[10px] text-muted-foreground">{group.chatTitle}</div>
+                        </div>
+                      </div>
+                      <span
+                        className={[
+                          "ml-auto inline-flex size-7 shrink-0 items-center justify-center rounded-md border",
+                          groupSelected ? "border-primary/30 bg-primary/15 text-primary" : "border-border bg-background text-muted-foreground",
+                        ].join(" ")}
+                      >
+                        {groupSelected ? <CheckCircleIcon aria-hidden="true" className="size-4" /> : <PlusIcon aria-hidden="true" className="size-4" />}
+                      </span>
+                    </CommandItem>
+                  ) : null}
 
-              {isOpen ? (
-                <div>
                   {group.topics.map((topic) => {
                     const key = topicKey(topic);
                     const checked = selectedKeys.has(key);
 
                     return (
-                      <button
-                        key={key}
-                        type="button"
-                        onClick={() => toggleTopic(topic)}
-                        title={topic.threadId === null ? topic.topicName : formatTopicDisplayName(topic.topicName, topic.threadId)}
+                    <CommandItem
+                      key={key}
+                      value={`${group.chatTitle} ${topic.topicName} topic ${topic.threadId ?? ""}`}
+                      onSelect={() => toggleTopic(topic)}
+                      className="flex items-center justify-between gap-3 border-l border-border/40 pl-6"
+                    >
+                      <div className="flex min-w-0 flex-1 items-center gap-2.5">
+                        <GroupAvatar title={group.chatTitle} chatId={group.chatId} />
+                        <div className="min-w-0">
+                          <div className="truncate text-[11px] text-foreground">
+                            {formatTopicDisplayName(topic.topicName, topic.threadId)}
+                          </div>
+                          <div className="text-[10px] text-muted-foreground">{group.chatTitle}</div>
+                        </div>
+                      </div>
+                      <span
                         className={[
-                          "grid w-full grid-cols-[20px_1fr] items-center gap-2 border-t border-white/10 px-3 py-2 text-left transition",
-                          checked ? "bg-emerald-400/8" : "hover:bg-white/5",
-                        ].join(" ")}
-                      >
-                        <span
-                          className={[
-                            "flex h-4 w-4 items-center justify-center rounded border text-[10px]",
-                            checked ? "border-emerald-300/60 bg-emerald-300 text-slate-950" : "border-white/10 bg-white/5 text-transparent",
+                          "ml-auto inline-flex size-7 shrink-0 items-center justify-center rounded-md border",
+                          checked ? "border-primary/30 bg-primary/15 text-primary" : "border-border bg-background text-muted-foreground",
                           ].join(" ")}
                         >
-                          ✓
+                          {checked ? <XCircleIcon aria-hidden="true" className="size-4" /> : <PlusIcon aria-hidden="true" className="size-4" />}
                         </span>
-                        <span className="min-w-0 truncate text-[12px] text-white/76">{formatTopicDisplayName(topic.topicName, topic.threadId)}</span>
-                      </button>
+                      </CommandItem>
                     );
                   })}
-                </div>
-              ) : null}
-            </div>
-          );
-        })}
-        </div>
-      </div>
+                </CommandGroup>
+              );
+            })}
+          </CommandList>
+        </Command>
+      </CommandDialog>
     </div>
   );
 }
@@ -3837,13 +3897,7 @@ function TopicTargetPicker({
 }) {
   const selectedKey = value ? topicKey(value) : null;
   const groups = buildTopicPickerGroups(topics);
-  const [openGroupIds, setOpenGroupIds] = useState<Set<number>>(() => {
-    const initial = new Set<number>();
-    if (value) {
-      initial.add(value.chatId);
-    }
-    return initial;
-  });
+  const [open, setOpen] = useState(false);
 
   function chooseTopic(topic: AllowedTopicSelection) {
     const key = topicKey(topic);
@@ -3854,32 +3908,21 @@ function TopicTargetPicker({
     onChange(topic);
   }
 
-  function toggleGroupOpen(chatId: number) {
-    setOpenGroupIds((current) => {
-      const next = new Set(current);
-      if (next.has(chatId)) {
-        next.delete(chatId);
-      } else {
-        next.add(chatId);
-      }
-      return next;
-    });
-  }
-
   return (
     <div className="rounded-[6px] border border-white/10 bg-white/5 p-3">
-      <div className="flex items-center justify-between gap-3">
-        <div>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
           <div className="text-[10px] uppercase tracking-[0.22em] text-white/35">Group chat / topic</div>
-          <div className="mt-1 text-[12px] text-white/72">{formatTopicSelectionLabel(value)}</div>
+          <div className="mt-1 truncate text-[12px] text-white/72">{formatTopicSelectionLabel(value)}</div>
         </div>
-        <button
-          type="button"
-          onClick={onClear}
-          className="h-8 rounded-[6px] border border-white/10 bg-white/10 px-2.5 text-[11px] text-white/75 transition hover:bg-white/5"
-        >
-          Clear
-        </button>
+        <div className="flex shrink-0 gap-1.5">
+          <Button type="button" variant="default" size="sm" onClick={() => setOpen(true)} className="h-8 px-2.5 text-[11px]">
+            Chọn
+          </Button>
+          <Button type="button" variant="outline" size="sm" onClick={onClear} className="h-8 px-2.5 text-[11px]">
+            Clear
+          </Button>
+        </div>
       </div>
 
       {!hasSnapshot ? (
@@ -3887,84 +3930,84 @@ function TopicTargetPicker({
           Scan bot để lấy group/topic hiện có.
         </div>
       ) : null}
+      <CommandDialog
+        open={open}
+        onOpenChange={setOpen}
+        title="Chọn group/topic"
+        description="Tìm group hoặc topic rồi chọn đích."
+        className="!h-[min(68vh,calc(100vh-2rem))] !max-h-[min(68vh,calc(100vh-2rem))] !w-[min(42rem,calc(100%-2rem))] !max-w-none overflow-hidden p-0"
+        showCloseButton
+      >
+        <Command className="h-full min-h-0 bg-background text-foreground">
+          <CommandInput placeholder="Tìm group hoặc topic..." />
+          <CommandList className="min-h-0 flex-1 overflow-y-auto">
+            <CommandEmpty>Không tìm thấy kết quả.</CommandEmpty>
 
-      <div className="mt-3 max-h-72 overflow-auto pr-2">
-        <div className="space-y-2">
-        {groups.length === 0 ? (
-          <div className="rounded-[6px] border border-white/10 bg-white/5 px-3 py-3 text-[12px] text-white/35">
-            Chưa có group/topic.
-          </div>
-        ) : null}
+            {groups.map((group) => {
+              const groupKey = topicKey(group.group);
+              const groupSelected = selectedKey === groupKey;
 
-        {groups.map((group) => {
-          const groupKey = topicKey(group.group);
-          const groupSelected = selectedKey === groupKey;
-          const isOpen = openGroupIds.has(group.chatId);
+              return (
+                <CommandGroup key={group.chatId} heading={group.chatTitle}>
+                  <CommandItem
+                    value={`${group.chatTitle} all messages group`}
+                    onSelect={() => chooseTopic(group.group)}
+                    className="flex items-center justify-between gap-3 rounded-md bg-muted/40"
+                  >
+                    <div className="flex min-w-0 flex-1 items-center gap-2.5">
+                      <GroupAvatar title={group.chatTitle} chatId={group.chatId} />
+                      <div className="min-w-0">
+                        <div className="truncate text-[12px] font-medium text-foreground">All messages</div>
+                        <div className="text-[10px] text-muted-foreground">{group.chatTitle}</div>
+                      </div>
+                    </div>
+                    <span
+                      className={[
+                        "ml-auto inline-flex size-7 shrink-0 items-center justify-center rounded-md border",
+                        groupSelected ? "border-primary/30 bg-primary/15 text-primary" : "border-border bg-background text-muted-foreground",
+                      ].join(" ")}
+                    >
+                      {groupSelected ? <CheckCircleIcon aria-hidden="true" className="size-4" /> : <PlusIcon aria-hidden="true" className="size-4" />}
+                    </span>
+                  </CommandItem>
 
-          return (
-            <div key={group.chatId} className="overflow-hidden rounded-[6px] border border-white/10 bg-[#101113]">
-              <div className="flex items-stretch gap-0">
-                <button
-                  type="button"
-                  onClick={() => chooseTopic(group.group)}
-                  className={[
-                    "min-w-0 flex-1 px-3 py-2 text-left transition",
-                    groupSelected ? "bg-sky-400/10" : "bg-white/5 hover:bg-white/10",
-                  ].join(" ")}
-                >
-                  <span className="block truncate text-[12px] font-medium text-white">{group.chatTitle}</span>
-                  <span className="block text-[10px] text-white/35">All messages</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => toggleGroupOpen(group.chatId)}
-                  className={[
-                    "flex w-10 shrink-0 items-center justify-center border-l border-white/10 transition",
-                    isOpen ? "bg-white/10 text-white/80" : "bg-white/5 text-white/35 hover:bg-white/10 hover:text-white/75",
-                  ].join(" ")}
-                  aria-label={isOpen ? "Thu gọn nhóm" : "Mở nhóm"}
-                >
-                  {isOpen ? <ChevronDownIcon aria-hidden="true" className="h-4 w-4" /> : <ChevronRightIcon aria-hidden="true" className="h-4 w-4" />}
-                </button>
-              </div>
-
-              {isOpen ? (
-                <div>
                   {group.topics.map((topic) => {
                     const key = topicKey(topic);
                     const checked = selectedKey === key;
 
                     return (
-                      <button
+                      <CommandItem
                         key={key}
-                        type="button"
-                        onClick={() => chooseTopic(topic)}
+                        value={`${group.chatTitle} ${topic.topicName} topic ${topic.threadId ?? ""}`}
+                        onSelect={() => chooseTopic(topic)}
+                        className="flex items-center justify-between gap-3 border-l border-border/40 pl-6"
+                      >
+                        <div className="flex min-w-0 flex-1 items-center gap-2.5">
+                          <GroupAvatar title={group.chatTitle} chatId={group.chatId} />
+                          <div className="min-w-0">
+                            <div className="truncate text-[11px] text-foreground">
+                              {formatTopicDisplayName(topic.topicName, topic.threadId)}
+                            </div>
+                            <div className="text-[10px] text-muted-foreground">{group.chatTitle}</div>
+                          </div>
+                        </div>
+                      <span
                         className={[
-                          "grid w-full grid-cols-[20px_1fr] items-center gap-2 border-t border-white/10 px-3 py-2 text-left transition",
-                          checked ? "bg-sky-400/8" : "hover:bg-white/5",
+                          "ml-auto inline-flex size-7 shrink-0 items-center justify-center rounded-md border",
+                          checked ? "border-primary/30 bg-primary/15 text-primary" : "border-border bg-background text-muted-foreground",
                         ].join(" ")}
                       >
-                        <span
-                          className={[
-                            "flex h-4 w-4 items-center justify-center rounded border text-[10px]",
-                            checked
-                              ? "border-sky-300/60 bg-sky-300 text-slate-950"
-                              : "border-white/10 bg-white/5 text-transparent",
-                          ].join(" ")}
-                        >
-                          ✓
-                        </span>
-                        <span className="min-w-0 truncate text-[12px] text-white/76">{formatTopicDisplayName(topic.topicName, topic.threadId)}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              ) : null}
-            </div>
-          );
-        })}
-        </div>
-      </div>
+                        {checked ? <XCircleIcon aria-hidden="true" className="size-4" /> : <PlusIcon aria-hidden="true" className="size-4" />}
+                      </span>
+                    </CommandItem>
+                  );
+                })}
+                </CommandGroup>
+              );
+            })}
+          </CommandList>
+        </Command>
+      </CommandDialog>
     </div>
   );
 }
@@ -4081,6 +4124,39 @@ function groupTopics(topics: AllowedTopicSelection[]) {
       return first.topicName.localeCompare(second.topicName);
     }),
   }));
+}
+
+function normalizePickerQuery(query: string) {
+  return query.trim().toLowerCase();
+}
+
+function topicMatchesQuery(topic: AllowedTopicSelection, query: string) {
+  if (!query) {
+    return true;
+  }
+
+  const chatTitle = topic.chatTitle.toLowerCase();
+  const topicName = topic.topicName.toLowerCase();
+  const threadIdText = topic.threadId === null ? "all messages" : `topic #${topic.threadId}`;
+  return chatTitle.includes(query) || topicName.includes(query) || threadIdText.includes(query);
+}
+
+function filterTopicGroups(
+  groups: ReturnType<typeof groupTopics>,
+  query: string,
+): Array<{ chatId: number; chatTitle: string; topics: AllowedTopicSelection[]; matchGroup: boolean }> {
+  const normalized = normalizePickerQuery(query);
+  if (!normalized) {
+    return [];
+  }
+
+  return groups
+    .map((group) => {
+      const matchGroup = group.chatTitle.toLowerCase().includes(normalized);
+      const topics = matchGroup ? group.topics : group.topics.filter((topic) => topicMatchesQuery(topic, normalized));
+      return topics.length > 0 ? { chatId: group.chatId, chatTitle: group.chatTitle, topics, matchGroup } : null;
+    })
+    .filter(Boolean) as Array<{ chatId: number; chatTitle: string; topics: AllowedTopicSelection[]; matchGroup: boolean }>;
 }
 
 function ToggleButton({

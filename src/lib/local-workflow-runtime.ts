@@ -46,7 +46,7 @@ export type AllowedTopicConfig = {
 };
 
 type WorkflowInventory = {
-  groups: { chatId: number; chatTitle: string; chatType: string }[];
+  groups: { chatId: number; chatTitle: string; chatType: string; photoFileId?: string | null }[];
   topics: { chatId: number; threadId: number; chatTitle: string; topicName: string }[];
   updatedAt: string | null;
 };

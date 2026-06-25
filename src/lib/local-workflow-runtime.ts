@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { mirrorWorkspaceInventory } from "@/lib/workspace-store";
+import { mirrorWorkspaceInventory, readWorkspaceInventory } from "@/lib/workspace-store";
 import {
   deleteTelegramWebhook,
   fetchUpdatesBatch,
@@ -45,8 +45,18 @@ export type AllowedTopicConfig = {
   topicName?: string;
 };
 
+export type TargetRoutingMode = "fixed" | "previous";
+
 type WorkflowInventory = {
-  groups: { chatId: number; chatTitle: string; chatType: string; photoFileId?: string | null }[];
+  groups: {
+    chatId: number;
+    chatTitle: string;
+    chatType: string;
+    photoFileId?: string | null;
+    photoContentType?: string | null;
+    photoDataBase64?: string | null;
+    photoSyncedAt?: string | null;
+  }[];
   topics: { chatId: number; threadId: number; chatTitle: string; topicName: string }[];
   updatedAt: string | null;
 };
@@ -79,15 +89,18 @@ type LocalWorkflowRuntime = {
   currentExecution: RuntimeExecution | null;
   lastExecution: RuntimeExecution | null;
   approvalTarget?: AllowedTopicConfig;
+  approvalTargetMode?: TargetRoutingMode;
   forwardTarget?: AllowedTopicConfig;
+  forwardTargetMode?: TargetRoutingMode;
   forwardTargets?: TargetWithNodeName[];
   messageTemplates?: MessageTemplateConfig[];
 };
 
 export type TargetWithNodeName = {
   nodeName: string;
-  target: AllowedTopicConfig;
+  target?: AllowedTopicConfig;
   keywords?: string;
+  routeMode?: TargetRoutingMode;
 };
 
 export type MessageTemplateConfig = {
@@ -103,7 +116,9 @@ type StartOptions = {
   token: string;
   allowedTopics?: AllowedTopicConfig[];
   approvalTarget?: AllowedTopicConfig;
+  approvalTargetMode?: TargetRoutingMode;
   forwardTarget?: AllowedTopicConfig;
+  forwardTargetMode?: TargetRoutingMode;
   forwardTargets?: TargetWithNodeName[];
   messageTemplates?: MessageTemplateConfig[];
 };
@@ -497,12 +512,22 @@ function recordUpdateInventory(update: TelegramUpdate) {
   recordChatInventory(update.chat_join_request?.chat);
 }
 
-export function recordWorkflowSnapshotInventory(snapshot: TelegramWorkflowSnapshot) {
-  runtime.inventory.groups = snapshot.groups.map((group) => ({
-    chatId: group.chatId,
-    chatTitle: group.chatTitle,
-    chatType: group.chatType,
-  }));
+export async function recordWorkflowSnapshotInventory(snapshot: TelegramWorkflowSnapshot) {
+  const existingInventory = await readWorkspaceInventory();
+  const existingGroups = new Map((existingInventory.groups ?? []).map((group) => [group.chatId, group]));
+
+  runtime.inventory.groups = snapshot.groups.map((group) => {
+    const existing = existingGroups.get(group.chatId);
+    return {
+      chatId: group.chatId,
+      chatTitle: group.chatTitle,
+      chatType: group.chatType,
+      photoFileId: existing?.photoFileId ?? null,
+      photoContentType: existing?.photoContentType ?? null,
+      photoDataBase64: existing?.photoDataBase64 ?? null,
+      photoSyncedAt: existing?.photoSyncedAt ?? null,
+    };
+  });
 
   runtime.inventory.topics = snapshot.topics.map((topic) => ({
     chatId: topic.chatId,
@@ -653,12 +678,36 @@ function normalizeAllowedTopics(topics: AllowedTopicConfig[] | undefined) {
   return normalized;
 }
 
+function resolveRoutedTarget(
+  target: AllowedTopicConfig | undefined,
+  routeMode: TargetRoutingMode | undefined,
+  sourceChatId: number | null | undefined,
+  sourceThreadId: number | null | undefined,
+) {
+  if (routeMode === "previous" && Number.isFinite(sourceChatId)) {
+    return {
+      chatId: Number(sourceChatId),
+      threadId: sourceThreadId === undefined ? null : sourceThreadId,
+      chatTitle: target?.chatTitle,
+      topicName: target?.topicName,
+    } satisfies AllowedTopicConfig;
+  }
+
+  return target;
+}
+
 async function sendApprovalRequest(update: TelegramUpdate) {
   const message = update.message;
   if (!message) return;
 
-  const chatId = runtime.approvalTarget?.chatId ?? approvalChatId;
-  const threadId = runtime.approvalTarget ? runtime.approvalTarget.threadId : approvalThreadId;
+  const routedTarget = resolveRoutedTarget(
+    runtime.approvalTarget,
+    runtime.approvalTargetMode,
+    message.chat.id,
+    message.message_thread_id ?? null,
+  );
+  const chatId = routedTarget?.chatId ?? approvalChatId;
+  const threadId = routedTarget ? routedTarget.threadId : approvalThreadId;
   const text = renderMessageTemplate(
     getMessageTemplate("Gửi tin nhắn xác nhận", "{{originalText}}"),
     {
@@ -735,7 +784,12 @@ async function processUpdate(update: TelegramUpdate) {
       if (runtime.forwardTargets) {
         const matchedNode = runtime.forwardTargets.find((ft) => ft.nodeName.startsWith("Có vật tư thay thế"));
         if (matchedNode) {
-          customTarget = matchedNode.target;
+          customTarget = resolveRoutedTarget(
+            matchedNode.target,
+            matchedNode.routeMode,
+            update.message.chat.id,
+            update.message.message_thread_id ?? null,
+          );
         }
       }
 
@@ -874,11 +928,17 @@ async function processUpdate(update: TelegramUpdate) {
       } else if (runtime.forwardTargets) {
         const matchedNode = runtime.forwardTargets.find((ft) => ft.nodeName.startsWith("Nghiệm thu vật tư"));
         if (matchedNode) {
+          const routedTarget = resolveRoutedTarget(
+            matchedNode.target,
+            matchedNode.routeMode,
+            sourceChatId,
+            sourceThreadId,
+          );
           addLog("info", `Routing supplier confirmation reply to fallback inspection target`, update.update_id);
           await runStep("Gửi nghiệm thu vật tư", () =>
             telegramRequest(runtime.token, "sendMessage", {
-              chat_id: matchedNode.target.chatId,
-              message_thread_id: matchedNode.target.threadId === null ? undefined : matchedNode.target.threadId,
+              chat_id: routedTarget?.chatId ?? forwardDestinationChatId,
+              message_thread_id: routedTarget?.threadId === null ? undefined : routedTarget?.threadId,
               text: inspectionText,
               parse_mode: "HTML",
             })
@@ -1006,12 +1066,17 @@ async function processUpdate(update: TelegramUpdate) {
         if (parsed.action === "vt_co") {
           // After confirming supply, send a force_reply message to the "Xác nhận nhà cung ứng" node target
           let supplierTarget: AllowedTopicConfig | undefined;
-          if (runtime.forwardTargets) {
-            const matchedNode = runtime.forwardTargets.find((ft) => ft.nodeName.startsWith("Xác nhận nhà cung ứng"));
-            if (matchedNode) {
-              supplierTarget = matchedNode.target;
-            }
-          }
+      if (runtime.forwardTargets) {
+        const matchedNode = runtime.forwardTargets.find((ft) => ft.nodeName.startsWith("Xác nhận nhà cung ứng"));
+        if (matchedNode) {
+          supplierTarget = resolveRoutedTarget(
+            matchedNode.target,
+            matchedNode.routeMode,
+            parsed.sourceChatId,
+            parsed.threadId,
+          );
+        }
+      }
 
           if (supplierTarget) {
             addLog("info", `Sending supplier confirmation prompt to: Xác nhận nhà cung ứng group`, update.update_id);
@@ -1089,7 +1154,7 @@ async function processUpdate(update: TelegramUpdate) {
 
       // Dynamic routing for Materials based on user-configured keywords
       const msgText = originalText;
-      const matchedTargets: { target: AllowedTopicConfig; nodeName: string }[] = [];
+      const matchedTargets: { target?: AllowedTopicConfig; nodeName: string; routeMode?: TargetRoutingMode }[] = [];
 
       if (runtime.forwardTargets && runtime.forwardTargets.length > 0) {
         for (const ft of runtime.forwardTargets) {
@@ -1100,7 +1165,7 @@ async function processUpdate(update: TelegramUpdate) {
               .filter(Boolean);
             const hasMatch = keywordsList.some((keyword) => msgText.toLowerCase().includes(keyword));
             if (hasMatch) {
-              matchedTargets.push({ target: ft.target, nodeName: ft.nodeName });
+              matchedTargets.push({ target: ft.target, nodeName: ft.nodeName, routeMode: ft.routeMode });
             }
           } else {
             // Fallback to name-based keyword check for backward compatibility
@@ -1108,7 +1173,7 @@ async function processUpdate(update: TelegramUpdate) {
             const isVatTuChinh = nodeNameLower.includes("vật tư chính") && msgText.toLowerCase().includes("vật tư chính");
             const isVatTuPhu = nodeNameLower.includes("vật tư phụ") && msgText.toLowerCase().includes("vật tư phụ");
             if (isVatTuChinh || isVatTuPhu) {
-              matchedTargets.push({ target: ft.target, nodeName: ft.nodeName });
+              matchedTargets.push({ target: ft.target, nodeName: ft.nodeName, routeMode: ft.routeMode });
             }
           }
         }
@@ -1117,13 +1182,17 @@ async function processUpdate(update: TelegramUpdate) {
       if (matchedTargets.length > 0) {
         // Send message to all matched targets (N x N routing) with Inline Keyboard options
         for (let i = 0; i < matchedTargets.length; i++) {
-          const { target, nodeName } = matchedTargets[i];
+          const { target, nodeName, routeMode } = matchedTargets[i];
+          const routedTarget = resolveRoutedTarget(target, routeMode, parsed.sourceChatId, parsed.threadId);
+          if (!routedTarget) {
+            continue;
+          }
           addLog("info", `Routing send message to: ${nodeName} (matched keywords)`, update.update_id);
           const stepName = `Gửi tin nhắn (${nodeName})`;
           await runStep(stepName, () =>
             telegramRequest(runtime.token, "sendMessage", {
-              chat_id: target.chatId,
-              message_thread_id: target.threadId === null ? undefined : target.threadId,
+              chat_id: routedTarget.chatId,
+              message_thread_id: routedTarget.threadId === null ? undefined : routedTarget.threadId,
               text: msgText,
               reply_markup: JSON.stringify({
                 inline_keyboard: [
@@ -1150,8 +1219,14 @@ async function processUpdate(update: TelegramUpdate) {
         }
       } else {
         // Default forward
-        let forwardChatId = runtime.forwardTarget?.chatId ?? forwardDestinationChatId;
-        let forwardThreadId = runtime.forwardTarget ? runtime.forwardTarget.threadId : null;
+        const routedForwardTarget = resolveRoutedTarget(
+          runtime.forwardTarget,
+          runtime.forwardTargetMode,
+          parsed.sourceChatId,
+          parsed.threadId,
+        );
+        let forwardChatId = routedForwardTarget?.chatId ?? forwardDestinationChatId;
+        let forwardThreadId = routedForwardTarget ? routedForwardTarget.threadId : null;
         await runStep(nodeNames.forward, () =>
           telegramRequest(runtime.token, "forwardMessage", {
             chat_id: forwardChatId,
@@ -1344,7 +1419,9 @@ export async function startLocalWorkflow(options: StartOptions) {
   runtime.token = token;
   runtime.allowedTopics = normalizeAllowedTopics(options.allowedTopics);
   runtime.approvalTarget = options.approvalTarget;
+  runtime.approvalTargetMode = options.approvalTargetMode ?? "fixed";
   runtime.forwardTarget = options.forwardTarget;
+  runtime.forwardTargetMode = options.forwardTargetMode ?? "fixed";
   runtime.forwardTargets = options.forwardTargets;
   runtime.messageTemplates = normalizeMessageTemplates(options.messageTemplates);
   runtime.active = true;

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import {
   type AllowedTopicConfig,
   type MessageTemplateConfig,
+  type TargetRoutingMode,
   getLocalWorkflowStatus,
   probeWorkflowInventory,
   refreshWorkflowInventory,
@@ -16,8 +17,15 @@ type RequestBody = {
   token?: string;
   allowedTopics?: AllowedTopicConfig[];
   approvalTarget?: AllowedTopicConfig;
+  approvalTargetMode?: TargetRoutingMode;
   forwardTarget?: AllowedTopicConfig;
-  forwardTargets?: any[];
+  forwardTargetMode?: TargetRoutingMode;
+  forwardTargets?: Array<{
+    nodeName: string;
+    target?: AllowedTopicConfig;
+    keywords?: string;
+    routeMode?: TargetRoutingMode;
+  }>;
   messageTemplates?: MessageTemplateConfig[];
 };
 
@@ -39,7 +47,9 @@ export async function POST(request: Request) {
         token: getToken(body),
         allowedTopics: body.allowedTopics,
         approvalTarget: body.approvalTarget,
+        approvalTargetMode: body.approvalTargetMode,
         forwardTarget: body.forwardTarget,
+        forwardTargetMode: body.forwardTargetMode,
         forwardTargets: body.forwardTargets,
         messageTemplates: body.messageTemplates,
       });

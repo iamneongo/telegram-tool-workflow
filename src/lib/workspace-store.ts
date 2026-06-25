@@ -4,7 +4,15 @@ import type { TelegramWorkflowSnapshot } from "@/lib/telegram";
 type JsonRecord = Record<string, unknown>;
 
 export type WorkflowInventory = {
-  groups: { chatId: number; chatTitle: string; chatType: string; photoFileId?: string | null }[];
+  groups: {
+    chatId: number;
+    chatTitle: string;
+    chatType: string;
+    photoFileId?: string | null;
+    photoContentType?: string | null;
+    photoDataBase64?: string | null;
+    photoSyncedAt?: string | null;
+  }[];
   topics: { chatId: number; threadId: number; chatTitle: string; topicName: string }[];
   updatedAt: string | null;
 };
@@ -118,6 +126,12 @@ function sanitizeInventory(raw: unknown): WorkflowInventory {
             chatTitle: String(item.chatTitle || `Chat ${chatId}`),
             chatType: String(item.chatType || "group"),
             photoFileId: typeof item.photoFileId === "string" ? item.photoFileId : item.photoFileId === null ? null : undefined,
+            photoContentType:
+              typeof item.photoContentType === "string" ? item.photoContentType : item.photoContentType === null ? null : undefined,
+            photoDataBase64:
+              typeof item.photoDataBase64 === "string" ? item.photoDataBase64 : item.photoDataBase64 === null ? null : undefined,
+            photoSyncedAt:
+              typeof item.photoSyncedAt === "string" ? item.photoSyncedAt : item.photoSyncedAt === null ? null : undefined,
           };
         })
         .filter(
@@ -126,6 +140,9 @@ function sanitizeInventory(raw: unknown): WorkflowInventory {
             chatTitle: string;
             chatType: string;
             photoFileId: string | null | undefined;
+            photoContentType: string | null | undefined;
+            photoDataBase64: string | null | undefined;
+            photoSyncedAt: string | null | undefined;
           } => Boolean(item),
         )
     : fallback.groups;
@@ -214,18 +231,29 @@ async function ensureTable(sql: ReturnType<typeof neon>) {
   tableReady = true;
 }
 
-function deriveInventoryFromSnapshot(snapshot: TelegramWorkflowSnapshot | null | undefined): WorkflowInventory | null {
+function deriveInventoryFromSnapshot(
+  snapshot: TelegramWorkflowSnapshot | null | undefined,
+  currentInventory: WorkflowInventory | null | undefined,
+): WorkflowInventory | null {
   if (!snapshot) {
     return null;
   }
 
+  const existingGroups = new Map((currentInventory?.groups ?? []).map((group) => [group.chatId, group]));
+
   return {
-    groups: snapshot.groups.map((group) => ({
-      chatId: group.chatId,
-      chatTitle: group.chatTitle,
-      chatType: group.chatType,
-      photoFileId: group.photoFileId ?? null,
-    })),
+    groups: snapshot.groups.map((group) => {
+      const existing = existingGroups.get(group.chatId);
+      return {
+        chatId: group.chatId,
+        chatTitle: group.chatTitle,
+        chatType: group.chatType,
+        photoFileId: existing?.photoFileId ?? group.photoFileId ?? null,
+        photoContentType: existing?.photoContentType ?? null,
+        photoDataBase64: existing?.photoDataBase64 ?? null,
+        photoSyncedAt: existing?.photoSyncedAt ?? null,
+      };
+    }),
     topics: snapshot.topics.map((topic) => ({
       chatId: topic.chatId,
       threadId: topic.threadId,
@@ -248,7 +276,7 @@ function mergeWorkspaceRecord(current: WorkspaceRecord, patch: WorkspaceRecordPa
   };
 
   const nextInventory: WorkflowInventory = patch.ui?.snapshot
-    ? deriveInventoryFromSnapshot(nextUi.snapshot) ?? inventoryBase
+    ? deriveInventoryFromSnapshot(nextUi.snapshot, current.inventory) ?? inventoryBase
     : inventoryBase;
 
   return {

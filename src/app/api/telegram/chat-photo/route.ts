@@ -1,22 +1,6 @@
 import { readWorkspaceRecord } from "@/lib/workspace-store";
-import { telegramRequest } from "@/lib/telegram";
-
-type TelegramFile = {
-  file_path?: string;
-};
-
-type TelegramChatPhoto = {
-  small_file_id?: string;
-  big_file_id?: string;
-};
-
-type TelegramChatInfo = {
-  photo?: TelegramChatPhoto;
-};
-
-function getTelegramFileUrl(token: string, filePath: string) {
-  return `https://api.telegram.org/file/bot${token}/${filePath}`;
-}
+import { fetchTelegramGroupAvatarCache } from "@/lib/telegram";
+import { writeWorkspaceRecord } from "@/lib/workspace-store";
 
 function parseChatId(value: string | null) {
   if (!value) {
@@ -60,7 +44,7 @@ function placeholderResponse(label: string, chatId: number, reason: string) {
   return new Response(buildPlaceholderSvg(label, chatId), {
     headers: {
       "content-type": "image/svg+xml; charset=utf-8",
-      "cache-control": "no-store",
+      "cache-control": "private, max-age=300, stale-while-revalidate=3600",
       "x-content-type-options": "nosniff",
       "x-chat-photo-source": "placeholder",
       "x-chat-photo-reason": reason,
@@ -72,89 +56,70 @@ export async function GET(request: Request) {
   try {
     const chatId = parseChatId(new URL(request.url).searchParams.get("chatId"));
     if (chatId === null) {
-      console.log("[chat-photo] invalid chatId");
       return placeholderResponse("Chat", 0, "invalid-chat-id");
     }
 
     const { record } = await readWorkspaceRecord();
-    const groupLabel = record.inventory.groups.find((group) => group.chatId === chatId)?.chatTitle ?? `Chat ${chatId}`;
-    const token = record.ui.token.trim() || process.env.TELEGRAM_BOT_TOKEN?.trim() || "";
-    console.log("[chat-photo] request", {
-      chatId,
-      groupLabel,
-      hasToken: Boolean(token),
-    });
-    if (!token) {
-      console.log("[chat-photo] fallback placeholder", { chatId, reason: "missing-token" });
-      return placeholderResponse(groupLabel, chatId, "missing-token");
-    }
+    const group = record.inventory.groups.find((item) => item.chatId === chatId);
+    const label = group?.chatTitle ?? `Chat ${chatId}`;
 
-    const cachedPhotoFileId = record.inventory.groups.find((group) => group.chatId === chatId)?.photoFileId ?? null;
-    let photoFileId = cachedPhotoFileId;
-    console.log("[chat-photo] cached photoFileId", { chatId, cachedPhotoFileId });
+    if (!group?.photoDataBase64) {
+      const token = record.ui.token?.trim() || process.env.TELEGRAM_BOT_TOKEN?.trim() || "";
+      if (!token) {
+        return placeholderResponse(label, chatId, "missing-token");
+      }
 
-    if (!photoFileId) {
-      const chat = await telegramRequest<TelegramChatInfo>(token, "getChat", { chat_id: chatId });
-      photoFileId = chat.photo?.big_file_id ?? chat.photo?.small_file_id ?? null;
-      console.log("[chat-photo] getChat result", {
-        chatId,
-        hasPhoto: Boolean(chat.photo),
-        photo: chat.photo
+      const avatar = await fetchTelegramGroupAvatarCache(token, chatId);
+      if (!avatar.photoDataBase64) {
+        return placeholderResponse(label, chatId, "missing-cache");
+      }
+
+      const nextGroups = record.inventory.groups.map((item) =>
+        item.chatId === chatId
           ? {
-              small_file_id: chat.photo.small_file_id ?? null,
-              big_file_id: chat.photo.big_file_id ?? null,
+              ...item,
+              photoFileId: avatar.photoFileId,
+              photoContentType: avatar.photoContentType,
+              photoDataBase64: avatar.photoDataBase64,
+              photoSyncedAt: avatar.photoSyncedAt,
             }
-          : null,
-        resolvedPhotoFileId: photoFileId,
+          : item,
+      );
+
+      await writeWorkspaceRecord({
+        inventory: {
+          ...record.inventory,
+          groups: nextGroups,
+          updatedAt: new Date().toISOString(),
+        },
+      });
+
+      const bytes = Buffer.from(avatar.photoDataBase64, "base64");
+      return new Response(bytes, {
+        headers: {
+          "content-type": avatar.photoContentType || "image/jpeg",
+          "cache-control": "private, max-age=86400, stale-while-revalidate=604800",
+          "x-chat-photo-source": "telegram-live",
+          "x-chat-photo-reason": "cache-miss",
+          "x-chat-photo-bytes": String(bytes.byteLength),
+          "x-chat-photo-synced-at": avatar.photoSyncedAt || "",
+        },
       });
     }
 
-    if (!photoFileId) {
-      console.log("[chat-photo] fallback placeholder", { chatId, reason: "no-photo-file-id" });
-      return placeholderResponse(groupLabel, chatId, "no-photo-file-id");
-    }
-
-    const file = await telegramRequest<TelegramFile>(token, "getFile", { file_id: photoFileId });
-    console.log("[chat-photo] getFile result", {
-      chatId,
-      photoFileId,
-      filePath: file.file_path ?? null,
-    });
-    if (!file.file_path) {
-      console.log("[chat-photo] fallback placeholder", { chatId, reason: "missing-file-path" });
-      return placeholderResponse(groupLabel, chatId, "missing-file-path");
-    }
-
-    const response = await fetch(getTelegramFileUrl(token, file.file_path), { cache: "no-store" });
-    console.log("[chat-photo] fetch telegram file", {
-      chatId,
-      photoFileId,
-      filePath: file.file_path,
-      ok: response.ok,
-      status: response.status,
-      contentType: response.headers.get("content-type"),
-    });
-    if (!response.ok) {
-      console.log("[chat-photo] fallback placeholder", { chatId, reason: "telegram-file-fetch-failed" });
-      return placeholderResponse(groupLabel, chatId, "telegram-file-fetch-failed");
-    }
-
-    const contentType = response.headers.get("content-type") || "image/jpeg";
-    const buffer = await response.arrayBuffer();
-
-    return new Response(buffer, {
+    const bytes = Buffer.from(group.photoDataBase64, "base64");
+    return new Response(bytes, {
       headers: {
-        "content-type": contentType,
-        "cache-control": "no-store",
-        "x-chat-photo-source": "telegram",
+        "content-type": group.photoContentType || "image/jpeg",
+        "cache-control": "private, max-age=86400, stale-while-revalidate=604800",
+        "x-chat-photo-source": "db-cache",
         "x-chat-photo-reason": "ok",
-        "x-chat-photo-file-id": photoFileId,
-        "x-chat-photo-file-path": file.file_path,
+        "x-chat-photo-bytes": String(bytes.byteLength),
+        "x-chat-photo-synced-at": group.photoSyncedAt || "",
       },
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Chat";
-    console.log("[chat-photo] error", { message });
     return placeholderResponse(message, 0, "error");
   }
 }

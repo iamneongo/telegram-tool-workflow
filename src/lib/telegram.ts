@@ -255,6 +255,11 @@ function recordSource(sources: Set<string>, source: string) {
   }
 }
 
+type TelegramFile = {
+  file_path?: string;
+  file_size?: number;
+};
+
 export async function telegramRequest<T>(
   token: string,
   method: string,
@@ -307,67 +312,64 @@ export async function telegramRequest<T>(
   return data.result;
 }
 
-async function resolveChatPhoto(token: string, chatId: number) {
+export type TelegramGroupAvatarCache = {
+  photoFileId: string | null;
+  photoContentType: string | null;
+  photoDataBase64: string | null;
+  photoSyncedAt: string | null;
+};
+
+export async function fetchTelegramGroupAvatarCache(
+  token: string,
+  chatId: number,
+): Promise<TelegramGroupAvatarCache> {
   try {
     const chat = await telegramRequest<TelegramChatFullInfo>(token, "getChat", { chat_id: chatId });
-    const photoFileId = chat.photo?.big_file_id ?? chat.photo?.small_file_id ?? null;
-    console.log("[telegram-photo] getChat", {
-      chatId,
-      hasPhoto: Boolean(chat.photo),
-      photo: chat.photo
-        ? {
-            small_file_id: chat.photo.small_file_id ?? null,
-            big_file_id: chat.photo.big_file_id ?? null,
-          }
-        : null,
-      resolvedPhotoFileId: photoFileId,
-    });
+    const photoFileId = chat.photo?.small_file_id ?? chat.photo?.big_file_id ?? null;
     if (!photoFileId) {
-      return { photoFileId: null };
+      return {
+        photoFileId: null,
+        photoContentType: null,
+        photoDataBase64: null,
+        photoSyncedAt: null,
+      };
     }
 
-    return { photoFileId };
-  } catch {
-    return { photoFileId: null };
-  }
-}
-
-async function mapWithConcurrency<TInput, TOutput>(
-  items: TInput[],
-  concurrency: number,
-  mapper: (item: TInput, index: number) => Promise<TOutput>,
-) {
-  if (items.length === 0) {
-    return [];
-  }
-
-  const limit = Math.max(1, Math.min(concurrency, items.length));
-  const results = new Array<TOutput>(items.length);
-  let cursor = 0;
-
-  async function worker() {
-    while (cursor < items.length) {
-      const index = cursor;
-      cursor += 1;
-      results[index] = await mapper(items[index], index);
+    const file = await telegramRequest<TelegramFile>(token, "getFile", { file_id: photoFileId });
+    if (!file.file_path) {
+      return {
+        photoFileId,
+        photoContentType: null,
+        photoDataBase64: null,
+        photoSyncedAt: null,
+      };
     }
-  }
 
-  await Promise.all(Array.from({ length: limit }, () => worker()));
-  return results;
-}
+    const response = await fetch(`https://api.telegram.org/file/bot${token}/${file.file_path}`, { cache: "no-store" });
+    if (!response.ok) {
+      return {
+        photoFileId,
+        photoContentType: null,
+        photoDataBase64: null,
+        photoSyncedAt: null,
+      };
+    }
 
-async function enrichGroupsWithPhotos(
-  token: string,
-  groups: { chatId: number; chatTitle: string; chatType: string; photoFileId?: string | null }[],
-) {
-  return mapWithConcurrency(groups, 4, async (group) => {
-    const { photoFileId } = await resolveChatPhoto(token, group.chatId);
+    const bytes = await response.arrayBuffer();
     return {
-      ...group,
       photoFileId,
+      photoContentType: response.headers.get("content-type") || "image/jpeg",
+      photoDataBase64: Buffer.from(bytes).toString("base64"),
+      photoSyncedAt: new Date().toISOString(),
     };
-  });
+  } catch {
+    return {
+      photoFileId: null,
+      photoContentType: null,
+      photoDataBase64: null,
+      photoSyncedAt: null,
+    };
+  }
 }
 
 function mergeGroupRecord(
@@ -774,7 +776,7 @@ export async function scanTelegramWorkflow(token: string, options: ScanOptions =
     warnings.add(`Telegram đang giữ ${webhook.pending_update_count} update chưa xử lý.`);
   }
 
-  const uniqueChats = await enrichGroupsWithPhotos(token, buildUniqueChats(rows));
+  const uniqueChats = buildUniqueChats(rows);
   const uniqueTopics = buildUniqueTopics(rows);
 
   return {
@@ -858,20 +860,10 @@ export async function scanTelegramBot(token: string, options: ScanOptions = {}) 
     warnings.add(`Telegram đang giữ ${webhook.pending_update_count} update chưa xử lý.`);
   }
 
-  const uniqueChats = await enrichGroupsWithPhotos(
-    token,
-    Array.from(groups.values()).sort((a, b) => a.title.localeCompare(b.title)).map((group) => ({
-      chatId: group.chatId,
-      chatTitle: group.title,
-      chatType: group.type,
-      photoFileId: group.photoFileId ?? null,
-    })),
-  );
-
   return {
     bot,
     webhook,
-    groups: uniqueChats,
+    groups: Array.from(groups.values()).sort((a, b) => a.title.localeCompare(b.title)),
     topics: Array.from(topics.values()).sort((a, b) => {
       if (a.chatTitle === b.chatTitle) {
         return a.threadId - b.threadId;

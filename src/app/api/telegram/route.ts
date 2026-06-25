@@ -1,9 +1,15 @@
 import { NextResponse } from "next/server";
 import { recordWorkflowSnapshotInventory } from "@/lib/local-workflow-runtime";
-import { deleteTelegramWebhook, scanTelegramWorkflow, TelegramApiError } from "@/lib/telegram";
+import {
+  deleteTelegramWebhook,
+  fetchTelegramGroupAvatarCache,
+  scanTelegramWorkflow,
+  TelegramApiError,
+} from "@/lib/telegram";
+import { readWorkspaceRecord, writeWorkspaceRecord } from "@/lib/workspace-store";
 
 type RequestBody = {
-  action?: "scan" | "deleteWebhook";
+  action?: "scan" | "deleteWebhook" | "syncAvatar";
   token?: string;
   deepScan?: boolean;
 };
@@ -41,8 +47,44 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: true, result });
     }
 
+    if (action === "syncAvatar") {
+      const workspace = await readWorkspaceRecord();
+      const groups = workspace.record.inventory.groups;
+
+      if (groups.length === 0) {
+        return NextResponse.json({ ok: true, syncedCount: 0, inventory: workspace.record.inventory });
+      }
+
+      let syncedCount = 0;
+      const nextGroups = [];
+
+      for (const group of groups) {
+        const avatar = await fetchTelegramGroupAvatarCache(token, group.chatId);
+        const nextGroup = {
+          ...group,
+          photoFileId: avatar.photoFileId,
+          photoContentType: avatar.photoContentType,
+          photoDataBase64: avatar.photoDataBase64,
+          photoSyncedAt: avatar.photoSyncedAt,
+        };
+        if (avatar.photoDataBase64) {
+          syncedCount += 1;
+        }
+        nextGroups.push(nextGroup);
+      }
+
+      const inventory = {
+        ...workspace.record.inventory,
+        groups: nextGroups,
+        updatedAt: new Date().toISOString(),
+      };
+
+      await writeWorkspaceRecord({ inventory });
+      return NextResponse.json({ ok: true, syncedCount, inventory });
+    }
+
     const result = await scanTelegramWorkflow(token, { deepScan: Boolean(body.deepScan) });
-    const inventory = recordWorkflowSnapshotInventory(result);
+    const inventory = await recordWorkflowSnapshotInventory(result);
     return NextResponse.json({ ok: true, ...result, inventory });
   } catch (error) {
     if (error instanceof TelegramApiError) {

@@ -17,6 +17,7 @@ import {
   PlusIcon,
   PaperAirplaneIcon,
   PencilSquareIcon,
+  PhotoIcon,
   PlayIcon,
   QuestionMarkCircleIcon,
   SquaresPlusIcon,
@@ -27,12 +28,16 @@ import {
 import {
   Background,
   BackgroundVariant,
+  BaseEdge,
   Handle,
   MarkerType,
   Position,
+  EdgeLabelRenderer,
   ReactFlow,
   applyNodeChanges,
+  getSmoothStepPath,
   type Edge,
+  type EdgeProps,
   type NodeChange,
   type ReactFlowInstance,
   type Node,
@@ -71,6 +76,8 @@ type ConfigPanelTabSpec = {
   id: ConfigPanelTab;
   label: string;
 };
+
+type TargetRoutingMode = "fixed" | "previous";
 
 type AllowedTopicSelection = {
   chatId: number;
@@ -1112,6 +1119,57 @@ function WorkflowNodeCard({ data, selected }: NodeProps<WorkflowNode>) {
 
 const nodeTypes = { workflowNode: WorkflowNodeCard };
 
+type WorkflowEdgeData = {
+  onDelete?: () => void;
+};
+
+type WorkflowEdgeProps = EdgeProps<Edge<WorkflowEdgeData, "workflowEdge">>;
+
+function WorkflowEdge({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, markerEnd, style, selected, data }: WorkflowEdgeProps) {
+  const [path, labelX, labelY] = getSmoothStepPath({
+    sourceX,
+    sourceY,
+    targetX,
+    targetY,
+    sourcePosition,
+    targetPosition,
+  });
+
+  return (
+    <>
+      <BaseEdge path={path} markerEnd={markerEnd} style={style} />
+      {selected ? (
+        <EdgeLabelRenderer>
+          <button
+            type="button"
+            className="nodrag nopan absolute z-50 flex h-8 w-8 items-center justify-center rounded-full border border-rose-300/40 bg-white text-rose-600 shadow-[0_10px_24px_rgba(244,63,94,0.22)] transition hover:bg-rose-50 hover:text-rose-700"
+            onClick={(event) => {
+              event.stopPropagation();
+              data?.onDelete?.();
+            }}
+            onMouseDown={(event) => {
+              event.stopPropagation();
+            }}
+            onPointerDown={(event) => {
+              event.stopPropagation();
+            }}
+            style={{
+              transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
+              pointerEvents: "auto",
+            }}
+            aria-label="Xóa line connect"
+            title="Xóa line connect"
+          >
+            <XMarkIcon aria-hidden="true" className="h-4 w-4" />
+          </button>
+        </EdgeLabelRenderer>
+      ) : null}
+    </>
+  );
+}
+
+const edgeTypes = { workflowEdge: WorkflowEdge };
+
 function cloneTemplateNodes() {
   return structuredClone(WORKFLOW_TEMPLATE.nodes);
 }
@@ -1381,6 +1439,14 @@ function normalizeTopicSelection(value: unknown): AllowedTopicSelection | null {
   };
 }
 
+function getTargetRoutingMode(parameters: JsonRecord | undefined): TargetRoutingMode {
+  return parameters?.targetMode === "previous" ? "previous" : "fixed";
+}
+
+function getConfiguredTopicSelection(parameters: JsonRecord | undefined) {
+  return getTargetRoutingMode(parameters) === "previous" ? null : getTopicSelection(parameters);
+}
+
 function getTopicSelection(parameters: JsonRecord | undefined) {
   const direct = normalizeTopicSelection(parameters?.target);
   if (direct) {
@@ -1444,7 +1510,7 @@ function getTopicSelection(parameters: JsonRecord | undefined) {
 function getTargetFromConfig(configs: N8nNodeConfig[], nodeName: string) {
   const node = configs.find((config) => config.name === nodeName);
   if (!node) return undefined;
-  const target = getTopicSelection(node.parameters);
+  const target = getConfiguredTopicSelection(node.parameters);
   if (!target || !target.chatId) return undefined;
   return target;
 }
@@ -1452,7 +1518,7 @@ function getTargetFromConfig(configs: N8nNodeConfig[], nodeName: string) {
 function getTargetFromConfigPrefix(configs: N8nNodeConfig[], prefix: string) {
   const node = configs.find((config) => config.name.startsWith(prefix));
   if (!node) return undefined;
-  const target = getTopicSelection(node.parameters);
+  const target = getConfiguredTopicSelection(node.parameters);
   if (!target || !target.chatId) return undefined;
   return target;
 }
@@ -1605,6 +1671,10 @@ function normalizeSubtitle(snapshot: TelegramWorkflowSnapshot | null, config: N8
   }
 
   if (isForwardOrRejectNode(config.name) || config.name.startsWith("Gửi tin nhắn xác nhận") || isSupplierConfirmationNode(config.name) || isInspectionMaterialNode(config.name)) {
+    const targetMode = getTargetRoutingMode(config.parameters);
+    if (targetMode === "previous") {
+      return "Đích trước đó";
+    }
     const target = getTopicSelection(config.parameters);
     return target ? formatTopicSelectionLabel(target) : "select target";
   }
@@ -1688,6 +1758,7 @@ export default function TelegramFlowWorkbench() {
   const [runtimeBusy, setRuntimeBusy] = useState(false);
   const [probeBusy, setProbeBusy] = useState(false);
   const [refreshBusy, setRefreshBusy] = useState(false);
+  const [avatarSyncBusy, setAvatarSyncBusy] = useState(false);
   const [refreshConfirmOpen, setRefreshConfirmOpen] = useState(false);
   const [refreshConfirmDraft, setRefreshConfirmDraft] = useState("");
   const [isFetching, setIsFetching] = useState(false);
@@ -1712,6 +1783,7 @@ export default function TelegramFlowWorkbench() {
   const [toast, setToast] = useState<string | null>(null);
   const [flowInstance, setFlowInstance] = useState<ReactFlowInstance<WorkflowNode, Edge> | null>(null);
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
+  const [avatarRefreshKey, setAvatarRefreshKey] = useState(0);
   const [hydrated, setHydrated] = useState(false);
 
   const ensureBuiltinNodes = useCallback((configs: N8nNodeConfig[]): N8nNodeConfig[] => {
@@ -1780,14 +1852,7 @@ export default function TelegramFlowWorkbench() {
     () => nodes.find((node) => node.id === selectedNodeId) ?? nodes[0],
     [nodes, selectedNodeId],
   );
-  const selectedEdge = useMemo(
-    () => edges.find((edge) => edge.id === selectedEdgeId) ?? null,
-    [edges, selectedEdgeId],
-  );
   const nodeNameById = useMemo(() => new Map(nodeConfigs.map((node) => [node.id, getNodeLabel(node)])), [nodeConfigs]);
-  const selectedEdgeLabel = selectedEdge
-    ? `${nodeNameById.get(selectedEdge.source) ?? "Node"} → ${nodeNameById.get(selectedEdge.target) ?? "Node"}`
-    : null;
   const selectedAllowedTopics = useMemo(
     () => (selectedConfig?.name === "Allowed Group Topic" ? getAllowedTopics(selectedConfig.parameters) : []),
     [selectedConfig],
@@ -1804,9 +1869,11 @@ export default function TelegramFlowWorkbench() {
   const configPanelTabs = useMemo(() => getConfigPanelTabs(selectedConfig), [selectedConfig]);
   const activeConfigPanelTab =
     configPanelTabs.find((tab) => tab.id === configPanelTab)?.id ?? configPanelTabs[0]?.id ?? "target";
+  const hasConfigTabs = configPanelTabs.length > 1;
+  const primaryConfigTab = configPanelTabs[0]?.id ?? "target";
   const configPanelWrapperClass = configPanelExpanded
     ? "fixed inset-4 z-40"
-    : "pointer-events-none absolute right-6 bottom-6 z-20 w-[380px] max-w-[calc(100vw-3rem)]";
+    : "pointer-events-none absolute right-6 bottom-6 z-20 w-[430px] max-w-[calc(100vw-3rem)]";
   const configPanelCardClass = configPanelExpanded
     ? "pointer-events-auto flex h-full w-full flex-col rounded-[12px] border border-white/10 bg-[#151516]/96 p-4 shadow-[0_28px_90px_rgba(0,0,0,0.52)] backdrop-blur-xl"
     : "pointer-events-auto flex max-h-[calc(100vh-6rem)] w-full flex-col rounded-[8px] border border-white/10 bg-[#151516]/94 p-4 shadow-[0_24px_80px_rgba(0,0,0,0.42)] backdrop-blur-xl";
@@ -1823,6 +1890,7 @@ export default function TelegramFlowWorkbench() {
           selectedTopics={selectedAllowedTopics}
           selectedCount={selectedAllowedTopics.length}
           hasSnapshot={Boolean(snapshot)}
+          avatarRefreshKey={avatarRefreshKey}
           onChange={setAllowedTopicsForSelectedNode}
           onSelectAll={() => setAllowedTopicsForSelectedNode(availableTopics)}
           onClear={() => setAllowedTopicsForSelectedNode([])}
@@ -1897,12 +1965,19 @@ export default function TelegramFlowWorkbench() {
                       const isConfigured = Boolean(target?.chatId);
 
                       return (
-                        <button
+                        <div
                           key={rowKey}
-                          type="button"
                           onClick={() => setSelectedMappingRowId(rowKey)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter" || event.key === " ") {
+                              event.preventDefault();
+                              setSelectedMappingRowId(rowKey);
+                            }
+                          }}
+                          role="button"
+                          tabIndex={0}
                           className={[
-                            "w-full rounded-[8px] border px-3 py-3 text-left transition",
+                            "w-full cursor-pointer rounded-[8px] border px-3 py-3 text-left transition",
                             isSelected ? "border-sky-400/25 bg-sky-400/8" : "border-white/10 bg-[#101113] hover:bg-white/5",
                           ].join(" ")}
                         >
@@ -1955,7 +2030,7 @@ export default function TelegramFlowWorkbench() {
                               </div>
                             </div>
                           </div>
-                        </button>
+                        </div>
                       );
                     })}
                   </div>
@@ -1978,12 +2053,19 @@ export default function TelegramFlowWorkbench() {
                         const isConfigured = Boolean(target?.chatId);
 
                         return (
-                          <button
+                          <div
                             key={rowKey}
-                            type="button"
                             onClick={() => setSelectedMappingRowId(rowKey)}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter" || event.key === " ") {
+                                event.preventDefault();
+                                setSelectedMappingRowId(rowKey);
+                              }
+                            }}
+                            role="button"
+                            tabIndex={0}
                             className={[
-                              "grid w-full grid-cols-[44px_1.2fr_1fr_124px] items-center gap-3 px-3 py-3 text-left transition",
+                              "grid w-full cursor-pointer grid-cols-[44px_1.2fr_1fr_124px] items-center gap-3 px-3 py-3 text-left transition",
                               isSelected ? "bg-sky-400/8" : "hover:bg-white/5",
                             ].join(" ")}
                           >
@@ -2028,7 +2110,7 @@ export default function TelegramFlowWorkbench() {
                                 <XMarkIcon aria-hidden="true" className="h-4 w-4" />
                               </button>
                             </span>
-                          </button>
+                          </div>
                         );
                       })}
                     </div>
@@ -2103,9 +2185,12 @@ export default function TelegramFlowWorkbench() {
                             <TopicTargetPicker
                               topics={availableTopics}
                               value={selectedTarget}
+                              mode="fixed"
                               hasSnapshot={Boolean(snapshot)}
+                              avatarRefreshKey={avatarRefreshKey}
                               onChange={(topic) => handleUpdateRowTarget(selectedRowKey ?? 0, topic)}
                               onClear={() => handleUpdateRowTarget(selectedRowKey ?? 0, null)}
+                              onModeChange={() => undefined}
                             />
                           </div>
                         </div>
@@ -2137,9 +2222,12 @@ export default function TelegramFlowWorkbench() {
         <TopicTargetPicker
           topics={availableTopics}
           value={getTopicSelection(selectedConfig.parameters)}
+          mode={getTargetRoutingMode(selectedConfig.parameters)}
           hasSnapshot={Boolean(snapshot)}
+          avatarRefreshKey={avatarRefreshKey}
           onChange={setTargetForSelectedNode}
           onClear={() => setTargetForSelectedNode(null)}
+          onModeChange={setTargetModeForSelectedNode}
         />
       );
     }
@@ -2222,6 +2310,15 @@ export default function TelegramFlowWorkbench() {
       })),
     [executionVisuals, nodes],
   );
+  const removeSelectedEdge = useCallback(() => {
+    if (!selectedEdgeId) {
+      return;
+    }
+
+    setEdges((current) => current.filter((edge) => edge.id !== selectedEdgeId));
+    setSelectedEdgeId(null);
+  }, [selectedEdgeId, setEdges]);
+
   const visualEdges = useMemo(
     () =>
       edges.map((edge) => {
@@ -2241,11 +2338,16 @@ export default function TelegramFlowWorkbench() {
         return {
           ...edge,
           animated: targetStatus !== "skipped",
+          type: "workflowEdge",
+          data: {
+            ...(edge.data ?? {}),
+            onDelete: removeSelectedEdge,
+          },
           style: { ...edge.style, stroke, strokeWidth: selected ? 3.2 : 2.6 },
           markerEnd: { type: MarkerType.ArrowClosed, color: stroke },
         };
       }),
-    [edges, executionVisuals, selectedEdgeId],
+    [edges, executionVisuals, removeSelectedEdge, selectedEdgeId],
   );
 
   const showToast = useCallback((message: string) => {
@@ -2463,16 +2565,6 @@ export default function TelegramFlowWorkbench() {
     [nodeConfigs.length, setNodes, showToast],
   );
 
-  const removeSelectedEdge = useCallback(() => {
-    if (!selectedEdgeId) {
-      return;
-    }
-
-    setEdges((current) => current.filter((edge) => edge.id !== selectedEdgeId));
-    setSelectedEdgeId(null);
-    showToast("Đã xóa line connect");
-  }, [selectedEdgeId, setEdges, showToast]);
-
   const onConnect = useCallback(
     (params: Connection) => {
       const edgeStyle = {
@@ -2607,6 +2699,7 @@ export default function TelegramFlowWorkbench() {
           const nextParams: JsonRecord = {
             ...node.parameters,
             target,
+            targetMode: target ? "fixed" : (node.parameters.targetMode ?? "fixed"),
           };
 
           if (isForwardOrRejectNode(node.name)) {
@@ -2633,6 +2726,7 @@ export default function TelegramFlowWorkbench() {
         const nextParams: JsonRecord = {
           ...currentParams,
           target,
+          targetMode: target ? "fixed" : (currentParams.targetMode ?? "fixed"),
         };
 
         if (isForwardOrRejectNode(selectedConfig.name)) {
@@ -2648,6 +2742,45 @@ export default function TelegramFlowWorkbench() {
         return {
           ...current,
           [selectedConfig.id]: stringifyJson(nextParams),
+        };
+      });
+    },
+    [nodeConfigs, selectedConfig, snapshot, syncNodes],
+  );
+
+  const setTargetModeForSelectedNode = useCallback(
+    (mode: TargetRoutingMode) => {
+      if (!selectedConfig || !isTargetConfigurableNode(selectedConfig.name)) {
+        return;
+      }
+
+      setNodeConfigs((current) => {
+        const next = current.map((node) => {
+          if (node.id !== selectedConfig.id) {
+            return node;
+          }
+
+          return {
+            ...node,
+            parameters: {
+              ...node.parameters,
+              targetMode: mode,
+            },
+          };
+        });
+        syncNodes(next, snapshot);
+        return next;
+      });
+
+      setParameterDrafts((current) => {
+        const node = nodeConfigs.find((n) => n.id === selectedConfig.id);
+        const currentParams = node ? node.parameters : {};
+        return {
+          ...current,
+          [selectedConfig.id]: stringifyJson({
+            ...currentParams,
+            targetMode: mode,
+          }),
         };
       });
     },
@@ -2869,7 +3002,7 @@ export default function TelegramFlowWorkbench() {
     setStatus({ kind: "loading", text: "Starting local workflow" });
 
     // Collect all forward targets from configs
-    const forwardTargets: Array<{ nodeName: string; target: AllowedTopicSelection; keywords?: string }> = [];
+    const forwardTargets: Array<{ nodeName: string; target?: AllowedTopicSelection; keywords?: string; routeMode?: TargetRoutingMode }> = [];
     const messageTemplates: MessageTemplateConfig[] = [];
     for (const config of nodeConfigs) {
       if (isForwardOrRejectNode(config.name) || isSupplierConfirmationNode(config.name) || isInspectionMaterialNode(config.name) || config.name.startsWith("Gửi tin nhắn xác nhận")) {
@@ -2880,16 +3013,19 @@ export default function TelegramFlowWorkbench() {
                 nodeName: `${config.name} (${mapping.keywords || "không từ khóa"})`,
                 target: mapping.target,
                 keywords: typeof mapping.keywords === "string" ? mapping.keywords : undefined,
+                routeMode: "fixed",
               });
             }
           }
         } else {
+          const targetMode = getTargetRoutingMode(config.parameters);
           const target = getTopicSelection(config.parameters);
-          if (target && target.chatId) {
+          if (targetMode === "previous" || (target && target.chatId)) {
             forwardTargets.push({
               nodeName: config.name,
-              target,
+              target: target ?? undefined,
               keywords: typeof config.parameters.keywords === "string" ? config.parameters.keywords : undefined,
+              routeMode: targetMode,
             });
           }
         }
@@ -2913,8 +3049,14 @@ export default function TelegramFlowWorkbench() {
           allowedTopics: getAllowedTopicsFromConfigs(nodeConfigs),
           approvalTarget: getTargetFromConfig(nodeConfigs, "Gửi tin nhắn xác nhận") ||
                           getTargetFromConfigPrefix(nodeConfigs, "Gửi tin nhắn xác nhận"),
+          approvalTargetMode: getTargetRoutingMode(
+            nodeConfigs.find((config) => config.name === "Gửi tin nhắn xác nhận" || config.name.startsWith("Gửi tin nhắn xác nhận"))?.parameters,
+          ),
           forwardTarget: getTargetFromConfig(nodeConfigs, "Forward Tin nhắn") ||
                          getTargetFromConfigPrefix(nodeConfigs, "Chuyển tiếp"),
+          forwardTargetMode: getTargetRoutingMode(
+            nodeConfigs.find((config) => config.name === "Forward Tin nhắn" || config.name.startsWith("Chuyển tiếp"))?.parameters,
+          ),
           forwardTargets,
           messageTemplates,
         }),
@@ -3121,6 +3263,44 @@ export default function TelegramFlowWorkbench() {
     }
   }, [applyRuntimeStatus, fetchWorkflow, refreshBusy, showToast, token]);
 
+  const syncAvatarCache = useCallback(async () => {
+    if (avatarSyncBusy) {
+      return;
+    }
+
+    const trimmedToken = token.trim();
+    setAvatarSyncBusy(true);
+    setStatus({ kind: "loading", text: "Syncing avatars" });
+
+    try {
+      clearAvatarPreviewCache();
+      const response = await fetch("/api/telegram", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "syncAvatar",
+          token: trimmedToken || undefined,
+        }),
+      });
+
+      const payload = (await response.json()) as { ok: boolean; syncedCount?: number; error?: string };
+      if (!response.ok || !payload.ok) {
+        throw new Error(payload.error || "Không sync được avatar.");
+      }
+
+      setAvatarRefreshKey((value) => value + 1);
+      const syncedCount = payload.syncedCount ?? 0;
+      showToast(syncedCount > 0 ? `Đã đồng bộ ${syncedCount} avatar` : "Đồng bộ avatar xong");
+      setStatus({ kind: "success", text: `Đã đồng bộ ${syncedCount} avatar` });
+    } catch (error) {
+      const message = getCleanErrorMessage(error, "Không sync được avatar.");
+      setStatus({ kind: "error", text: message });
+      showToast(message);
+    } finally {
+      setAvatarSyncBusy(false);
+    }
+  }, [avatarSyncBusy, showToast, token]);
+
   const openRefreshConfirm = useCallback(() => {
     setRefreshConfirmDraft("");
     setRefreshConfirmOpen(true);
@@ -3300,6 +3480,7 @@ export default function TelegramFlowWorkbench() {
             setSelectedEdgeId(null);
           }}
           nodeTypes={nodeTypes}
+          edgeTypes={edgeTypes}
           fitView
           fitViewOptions={{ padding: 0.32, maxZoom: 0.82 }}
           minZoom={0.45}
@@ -3311,7 +3492,7 @@ export default function TelegramFlowWorkbench() {
           elementsSelectable
           className="h-full w-full"
           defaultEdgeOptions={{
-            type: "smoothstep",
+            type: "workflowEdge",
           style: { stroke: edgeStroke, strokeWidth: 1.35 },
             markerEnd: { type: MarkerType.ArrowClosed, color: edgeArrow },
           }}
@@ -3381,6 +3562,24 @@ export default function TelegramFlowWorkbench() {
               </button>
               <button
                 type="button"
+                onClick={() => void syncAvatarCache()}
+                disabled={avatarSyncBusy}
+                title="Sync avatars"
+                className={[
+                  "flex h-9 w-9 items-center justify-center rounded-[6px] border transition disabled:cursor-not-allowed disabled:opacity-60",
+                  avatarSyncBusy
+                    ? "border-violet-400/25 bg-violet-400/10 text-violet-200"
+                    : "border-white/10 bg-white/5 text-white/35 hover:bg-white/10 hover:text-white",
+                ].join(" ")}
+              >
+                {avatarSyncBusy ? (
+                  <span className="text-[10px] font-medium text-white/55">...</span>
+                ) : (
+                  <PhotoIcon className="h-5 w-5" />
+                )}
+              </button>
+              <button
+                type="button"
                 onClick={() => setConfigOpen((value) => !value)}
                 title="Node Settings"
                 className={[
@@ -3394,22 +3593,6 @@ export default function TelegramFlowWorkbench() {
           </div>
         </div>
       </div>
-
-      {selectedEdge ? (
-        <div className="pointer-events-none absolute right-6 top-6 z-30">
-          <div className="pointer-events-auto rounded-[8px] border border-sky-400/20 bg-[#151516]/94 px-3 py-2 shadow-[0_20px_70px_rgba(0,0,0,0.35)] backdrop-blur-xl">
-            <div className="text-[10px] uppercase tracking-[0.22em] text-white/35">Line</div>
-            <div className="mt-1 max-w-[220px] truncate text-[12px] text-white/78">{selectedEdgeLabel}</div>
-            <button
-              type="button"
-              onClick={removeSelectedEdge}
-              className="mt-2 h-8 rounded-[6px] border border-rose-400/25 bg-rose-400/12 px-3 text-[11px] font-medium text-rose-100 transition hover:bg-rose-400/18"
-            >
-              Delete line
-            </button>
-          </div>
-        </div>
-      ) : null}
 
       {paletteOpen ? (
         <Card className="pointer-events-auto absolute left-6 top-[108px] z-20 w-[320px] border-white/10 bg-[#151516]/94 shadow-[0_24px_80px_rgba(0,0,0,0.38)] backdrop-blur-xl">
@@ -3478,108 +3661,184 @@ export default function TelegramFlowWorkbench() {
       {configOpen ? (
         <div className={configPanelWrapperClass}>
           <Card className={configPanelCardClass}>
-            <Tabs
-              value={activeConfigPanelTab}
-              onValueChange={(value) => setConfigPanelTab(value as ConfigPanelTab)}
-              className="flex h-full w-full flex-col"
-            >
-            <CardHeader className="space-y-3 p-4 pb-0">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <CardDescription className="text-[10px] uppercase tracking-[0.28em] text-white/35">
-                    Node
-                  </CardDescription>
-                  {selectedConfig ? (
-                    isRenamingNode ? (
-                      <Input
-                        autoFocus
-                        value={renameDraft}
-                        onChange={(event) => setRenameDraft(event.target.value)}
-                        onBlur={commitNodeRename}
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter") {
-                            event.preventDefault();
-                            commitNodeRename();
-                          }
-                          if (event.key === "Escape") {
-                            event.preventDefault();
-                            cancelNodeRename();
-                          }
-                        }}
-                        className="mt-2 h-9 w-full rounded-[6px] border-sky-400/30 bg-[#101011] px-3 text-[14px] font-medium text-white outline-none focus:border-sky-400/50"
-                      />
-                    ) : (
-                      <button
+            {hasConfigTabs ? (
+              <Tabs value={activeConfigPanelTab} onValueChange={(value) => setConfigPanelTab(value as ConfigPanelTab)} className="flex h-full w-full flex-col">
+                <CardHeader className="space-y-3 p-4 pb-0">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <CardDescription className="text-[10px] uppercase tracking-[0.28em] text-white/35">
+                        Node
+                      </CardDescription>
+                      {selectedConfig ? (
+                        isRenamingNode ? (
+                          <Input
+                            autoFocus
+                            value={renameDraft}
+                            onChange={(event) => setRenameDraft(event.target.value)}
+                            onBlur={commitNodeRename}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") {
+                                event.preventDefault();
+                                commitNodeRename();
+                              }
+                              if (event.key === "Escape") {
+                                event.preventDefault();
+                                cancelNodeRename();
+                              }
+                            }}
+                            className="mt-2 h-9 w-full rounded-[6px] border-sky-400/30 bg-[#101011] px-3 text-[14px] font-medium text-white outline-none focus:border-sky-400/50"
+                          />
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={beginNodeRename}
+                            className="mt-2 block w-full truncate text-left text-sm font-medium text-white transition hover:text-sky-300"
+                            title="Bấm để đổi tên"
+                          >
+                            {getNodeLabel(selectedConfig)}
+                          </button>
+                        )
+                      ) : (
+                        <div className="mt-2 truncate text-sm font-medium text-white">Node</div>
+                      )}
+                      <CardDescription className="mt-1 truncate text-[11px] leading-5 text-white/35">
+                        {selectedConfig ? normalizeSubtitle(snapshot, selectedConfig) : "Chọn node để cấu hình"}
+                      </CardDescription>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button
                         type="button"
-                        onClick={beginNodeRename}
-                        className="mt-2 block w-full truncate text-left text-sm font-medium text-white transition hover:text-sky-300"
-                        title="Bấm để đổi tên"
+                        variant="outline"
+                        size="icon-sm"
+                        onClick={() => setConfigPanelExpanded((value) => !value)}
+                        aria-label={configPanelExpanded ? "Thu nhỏ" : "Phóng to"}
+                        title={configPanelExpanded ? "Thu nhỏ" : "Phóng to"}
+                        className="border-white/10 bg-white/5 text-white/35 hover:bg-white/10 hover:text-white"
                       >
-                        {getNodeLabel(selectedConfig)}
-                      </button>
-                    )
-                  ) : (
-                    <div className="mt-2 truncate text-sm font-medium text-white">Node</div>
-                  )}
-                  <CardDescription className="mt-1 truncate text-[11px] leading-5 text-white/35">
-                    {selectedConfig ? normalizeSubtitle(snapshot, selectedConfig) : "Chọn node để cấu hình"}
-                  </CardDescription>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="icon-sm"
-                    onClick={() => setConfigPanelExpanded((value) => !value)}
-                    aria-label={configPanelExpanded ? "Thu nhỏ" : "Phóng to"}
-                    title={configPanelExpanded ? "Thu nhỏ" : "Phóng to"}
-                    className="border-white/10 bg-white/5 text-white/35 hover:bg-white/10 hover:text-white"
-                  >
-                    {configPanelExpanded ? <ArrowsPointingInIcon aria-hidden="true" className="h-4 w-4" /> : <ArrowsPointingOutIcon aria-hidden="true" className="h-4 w-4" />}
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="icon-sm"
-                    onClick={() => setConfigOpen(false)}
-                    aria-label="Đóng"
-                    title="Đóng"
-                    className="border-white/10 bg-white/5 text-white/35 hover:bg-white/10 hover:text-white"
-                  >
-                    <XMarkIcon aria-hidden="true" className="h-4 w-4" />
-                  </Button>
-                </div>
-              </div>
+                        {configPanelExpanded ? <ArrowsPointingInIcon aria-hidden="true" className="h-4 w-4" /> : <ArrowsPointingOutIcon aria-hidden="true" className="h-4 w-4" />}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="icon-sm"
+                        onClick={() => setConfigOpen(false)}
+                        aria-label="Đóng"
+                        title="Đóng"
+                        className="border-white/10 bg-white/5 text-white/35 hover:bg-white/10 hover:text-white"
+                      >
+                        <XMarkIcon aria-hidden="true" className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
 
-              {configPanelTabs.length ? (
-                <TabsList className="flex h-auto w-full flex-wrap justify-start gap-1 rounded-[8px] border border-white/10 bg-white/5 p-1">
-                  {configPanelTabs.map((tab) => (
-                    <TabsTrigger
-                      key={tab.id}
-                      value={tab.id}
-                      title={tab.id === "template" ? MESSAGE_TEMPLATE_HELP_TEXT : undefined}
-                      className="rounded-[6px] px-3 py-1.5 text-[11px] font-medium text-white/60 data-active:bg-sky-400 data-active:text-slate-950 hover:bg-white/10 hover:text-white"
-                    >
-                      {tab.label}
-                    </TabsTrigger>
-                  ))}
-                </TabsList>
-              ) : null}
-            </CardHeader>
+                  <TabsList className="flex h-auto w-full flex-wrap justify-start gap-1 rounded-[8px] border border-white/10 bg-white/5 p-1">
+                    {configPanelTabs.map((tab) => (
+                      <TabsTrigger
+                        key={tab.id}
+                        value={tab.id}
+                        title={tab.id === "template" ? MESSAGE_TEMPLATE_HELP_TEXT : undefined}
+                        className="rounded-[6px] px-3 py-1.5 text-[11px] font-medium text-white/60 data-active:bg-sky-400 data-active:text-slate-950 hover:bg-white/10 hover:text-white"
+                      >
+                        {tab.label}
+                      </TabsTrigger>
+                    ))}
+                  </TabsList>
+                </CardHeader>
 
-            <Separator className="bg-white/10" />
-            <CardContent className="min-h-0 flex-1 px-4 pb-4 pt-3">
-              <ScrollArea className="h-[calc(100vh-10rem)] pr-2">
-                <div className="space-y-4 pr-1">
-                  {configPanelTabs.map((tab) => (
-                    <TabsContent key={tab.id} value={tab.id} className="mt-0 outline-none">
-                      {selectedConfig ? renderConfigPanelContent(tab.id) : null}
-                    </TabsContent>
-                  ))}
-                </div>
-              </ScrollArea>
-            </CardContent>
-            </Tabs>
+                <Separator className="bg-white/10" />
+                <CardContent className="min-h-0 flex-1 px-4 pb-4 pt-3">
+                  <ScrollArea className="h-[calc(100vh-10rem)] pr-2">
+                    <div className="space-y-4 pr-1">
+                      {configPanelTabs.map((tab) => (
+                        <TabsContent key={tab.id} value={tab.id} className="mt-0 outline-none">
+                          {selectedConfig ? renderConfigPanelContent(tab.id) : null}
+                        </TabsContent>
+                      ))}
+                    </div>
+                  </ScrollArea>
+                </CardContent>
+              </Tabs>
+            ) : (
+              <>
+                <CardHeader className="space-y-3 p-4 pb-0">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <CardDescription className="text-[10px] uppercase tracking-[0.28em] text-white/35">
+                        Node
+                      </CardDescription>
+                      {selectedConfig ? (
+                        isRenamingNode ? (
+                          <Input
+                            autoFocus
+                            value={renameDraft}
+                            onChange={(event) => setRenameDraft(event.target.value)}
+                            onBlur={commitNodeRename}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") {
+                                event.preventDefault();
+                                commitNodeRename();
+                              }
+                              if (event.key === "Escape") {
+                                event.preventDefault();
+                                cancelNodeRename();
+                              }
+                            }}
+                            className="mt-2 h-9 w-full rounded-[6px] border-sky-400/30 bg-[#101011] px-3 text-[14px] font-medium text-white outline-none focus:border-sky-400/50"
+                          />
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={beginNodeRename}
+                            className="mt-2 block w-full truncate text-left text-sm font-medium text-white transition hover:text-sky-300"
+                            title="Bấm để đổi tên"
+                          >
+                            {getNodeLabel(selectedConfig)}
+                          </button>
+                        )
+                      ) : (
+                        <div className="mt-2 truncate text-sm font-medium text-white">Node</div>
+                      )}
+                      <CardDescription className="mt-1 truncate text-[11px] leading-5 text-white/35">
+                        {selectedConfig ? normalizeSubtitle(snapshot, selectedConfig) : "Chọn node để cấu hình"}
+                      </CardDescription>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="icon-sm"
+                        onClick={() => setConfigPanelExpanded((value) => !value)}
+                        aria-label={configPanelExpanded ? "Thu nhỏ" : "Phóng to"}
+                        title={configPanelExpanded ? "Thu nhỏ" : "Phóng to"}
+                        className="border-white/10 bg-white/5 text-white/35 hover:bg-white/10 hover:text-white"
+                      >
+                        {configPanelExpanded ? <ArrowsPointingInIcon aria-hidden="true" className="h-4 w-4" /> : <ArrowsPointingOutIcon aria-hidden="true" className="h-4 w-4" />}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="icon-sm"
+                        onClick={() => setConfigOpen(false)}
+                        aria-label="Đóng"
+                        title="Đóng"
+                        className="border-white/10 bg-white/5 text-white/35 hover:bg-white/10 hover:text-white"
+                      >
+                        <XMarkIcon aria-hidden="true" className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
+                </CardHeader>
+
+                <Separator className="bg-white/10" />
+                <CardContent className="min-h-0 flex-1 px-4 pb-4 pt-3">
+                  <ScrollArea className="h-[calc(100vh-10rem)] pr-2">
+                    <div className="space-y-4 pr-1">
+                      {selectedConfig ? renderConfigPanelContent(primaryConfigTab) : null}
+                    </div>
+                  </ScrollArea>
+                </CardContent>
+              </>
+            )}
           </Card>
         </div>
       ) : null}
@@ -3648,58 +3907,65 @@ function MetaBox({ label, value, valueClassName = "text-white/75" }: { label: st
   );
 }
 
-function GroupAvatar({ title, chatId }: { title: string; chatId: number }) {
+const avatarPreviewCache = new Map<number, string>();
+const avatarPreviewInFlight = new Map<number, Promise<string | null>>();
+
+function clearAvatarPreviewCache() {
+  for (const url of avatarPreviewCache.values()) {
+    URL.revokeObjectURL(url);
+  }
+  avatarPreviewCache.clear();
+  avatarPreviewInFlight.clear();
+}
+
+function GroupAvatar({ title, chatId, refreshKey }: { title: string; chatId: number; refreshKey: number }) {
   const [imageSrc, setImageSrc] = useState<string | null>(null);
   const cleanTitle = title.trim();
   const fallback = cleanTitle ? cleanTitle.charAt(0).toUpperCase() : "G";
 
   useEffect(() => {
-    let objectUrl: string | null = null;
     let cancelled = false;
 
     async function loadAvatar() {
+      const cached = avatarPreviewCache.get(chatId);
+      if (cached) {
+        if (!cancelled) {
+          setImageSrc(cached);
+        }
+        return;
+      }
+
+      const inFlight = avatarPreviewInFlight.get(chatId);
+      if (inFlight) {
+        const pending = await inFlight;
+        if (!cancelled) {
+          setImageSrc(pending);
+        }
+        return;
+      }
+
       const endpoint = `/api/telegram/chat-photo?chatId=${chatId}`;
-      console.log("[chat-photo][browser] fetch start", {
-        chatId,
-        title: cleanTitle,
-        endpoint,
-      });
+      const cachedEndpoint = `${endpoint}&v=${refreshKey}`;
 
-      try {
-        const response = await fetch(endpoint, { cache: "no-store" });
+      const request = (async () => {
+        try {
+          const response = await fetch(cachedEndpoint);
 
-        const source = response.headers.get("x-chat-photo-source") ?? "unknown";
-        const reason = response.headers.get("x-chat-photo-reason") ?? "none";
-        const fileId = response.headers.get("x-chat-photo-file-id") ?? "";
-        const filePath = response.headers.get("x-chat-photo-file-path") ?? "";
-        const contentType = response.headers.get("content-type") ?? "unknown";
-
-        console.log("[chat-photo][browser] fetch result", {
-          chatId,
-          title: cleanTitle,
-          ok: response.ok,
-          status: response.status,
-          source,
-          reason,
-          fileId,
-          filePath,
-          contentType,
-        });
-
-        const blob = await response.blob();
-        objectUrl = URL.createObjectURL(blob);
-        if (!cancelled) {
-          setImageSrc(objectUrl);
+          const blob = await response.blob();
+          const objectUrl = URL.createObjectURL(blob);
+          avatarPreviewCache.set(chatId, objectUrl);
+          return objectUrl;
+        } catch (error) {
+          return null;
+        } finally {
+          avatarPreviewInFlight.delete(chatId);
         }
-      } catch (error) {
-        console.log("[chat-photo][browser] fetch error", {
-          chatId,
-          title: cleanTitle,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        if (!cancelled) {
-          setImageSrc(null);
-        }
+      })();
+
+      avatarPreviewInFlight.set(chatId, request);
+      const nextImage = await request;
+      if (!cancelled) {
+        setImageSrc(nextImage);
       }
     }
 
@@ -3707,11 +3973,8 @@ function GroupAvatar({ title, chatId }: { title: string; chatId: number }) {
 
     return () => {
       cancelled = true;
-      if (objectUrl) {
-        URL.revokeObjectURL(objectUrl);
-      }
     };
-  }, [chatId, cleanTitle]);
+  }, [chatId, cleanTitle, refreshKey]);
 
   return (
     <div className="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-full border border-white/10 bg-white/5 text-[11px] font-semibold text-white/70">
@@ -3729,6 +3992,7 @@ function AllowedTopicPicker({
   selectedTopics,
   selectedCount,
   hasSnapshot,
+  avatarRefreshKey,
   onChange,
   onSelectAll,
   onClear,
@@ -3737,6 +4001,7 @@ function AllowedTopicPicker({
   selectedTopics: AllowedTopicSelection[];
   selectedCount: number;
   hasSnapshot: boolean;
+  avatarRefreshKey: number;
   onChange: (topics: AllowedTopicSelection[]) => void;
   onSelectAll: () => void;
   onClear: () => void;
@@ -3824,7 +4089,7 @@ function AllowedTopicPicker({
                       className="flex items-center justify-between gap-3 rounded-md bg-muted/40"
                     >
                       <div className="flex min-w-0 flex-1 items-center gap-2.5">
-                        <GroupAvatar title={group.chatTitle} chatId={group.chatId} />
+                        <GroupAvatar title={group.chatTitle} chatId={group.chatId} refreshKey={avatarRefreshKey} />
                         <div className="min-w-0">
                           <div className="truncate text-[12px] font-medium text-foreground">All messages</div>
                           <div className="text-[10px] text-muted-foreground">{group.chatTitle}</div>
@@ -3833,10 +4098,10 @@ function AllowedTopicPicker({
                       <span
                         className={[
                           "ml-auto inline-flex size-7 shrink-0 items-center justify-center rounded-md border",
-                          groupSelected ? "border-primary/30 bg-primary/15 text-primary" : "border-border bg-background text-muted-foreground",
+                          groupSelected ? "border-rose-400/30 bg-rose-400/15 text-rose-300" : "border-emerald-400/25 bg-emerald-400/10 text-emerald-300",
                         ].join(" ")}
                       >
-                        {groupSelected ? <CheckCircleIcon aria-hidden="true" className="size-4" /> : <PlusIcon aria-hidden="true" className="size-4" />}
+                        {groupSelected ? <XCircleIcon aria-hidden="true" className="size-4" /> : <PlusIcon aria-hidden="true" className="size-4" />}
                       </span>
                     </CommandItem>
                   ) : null}
@@ -3853,7 +4118,7 @@ function AllowedTopicPicker({
                       className="flex items-center justify-between gap-3 border-l border-border/40 pl-6"
                     >
                       <div className="flex min-w-0 flex-1 items-center gap-2.5">
-                        <GroupAvatar title={group.chatTitle} chatId={group.chatId} />
+                        <GroupAvatar title={group.chatTitle} chatId={group.chatId} refreshKey={avatarRefreshKey} />
                         <div className="min-w-0">
                           <div className="truncate text-[11px] text-foreground">
                             {formatTopicDisplayName(topic.topicName, topic.threadId)}
@@ -3885,15 +4150,21 @@ function AllowedTopicPicker({
 function TopicTargetPicker({
   topics,
   value,
+  mode,
   hasSnapshot,
+  avatarRefreshKey,
   onChange,
   onClear,
+  onModeChange,
 }: {
   topics: AllowedTopicSelection[];
   value: AllowedTopicSelection | null;
+  mode: TargetRoutingMode;
   hasSnapshot: boolean;
+  avatarRefreshKey: number;
   onChange: (topic: AllowedTopicSelection) => void;
   onClear: () => void;
+  onModeChange: (mode: TargetRoutingMode) => void;
 }) {
   const selectedKey = value ? topicKey(value) : null;
   const groups = buildTopicPickerGroups(topics);
@@ -3908,18 +4179,51 @@ function TopicTargetPicker({
     onChange(topic);
   }
 
+  const selectionLabel = value ? formatTopicSelectionLabel(value) : "Chưa chọn";
+
   return (
     <div className="rounded-[6px] border border-white/10 bg-white/5 p-3">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0 flex-1">
           <div className="text-[10px] uppercase tracking-[0.22em] text-white/35">Group chat / topic</div>
-          <div className="mt-1 truncate text-[12px] text-white/72">{formatTopicSelectionLabel(value)}</div>
+          <div className="mt-1 truncate text-[12px] text-white/72">{selectionLabel}</div>
+          {mode === "previous" ? (
+            <div className="mt-1 truncate text-[10px] text-sky-100/70">Đang dùng group/topic từ nguồn trước đó</div>
+          ) : null}
         </div>
-        <div className="flex shrink-0 gap-1.5">
-          <Button type="button" variant="default" size="sm" onClick={() => setOpen(true)} className="h-8 px-2.5 text-[11px]">
-            Chọn
-          </Button>
-          <Button type="button" variant="outline" size="sm" onClick={onClear} className="h-8 px-2.5 text-[11px]">
+        <div className="flex shrink-0 flex-wrap items-center justify-start gap-1.5 sm:justify-end">
+          <button
+            type="button"
+            aria-pressed={mode === "previous"}
+            onClick={() => onModeChange(mode === "previous" ? "fixed" : "previous")}
+            className={[
+              "inline-flex h-8 min-w-[132px] items-center justify-between gap-3 rounded-[6px] border px-3 text-[11px] font-medium transition",
+              mode === "previous"
+                ? "border-sky-400/30 bg-sky-400/15 text-sky-100"
+                : "border-white/10 bg-white/5 text-white/72 hover:bg-white/10",
+            ].join(" ")}
+          >
+            <span className="whitespace-nowrap">Đích trước đó</span>
+            <span
+              className={[
+                "relative inline-flex h-4 w-7 shrink-0 rounded-full transition",
+                mode === "previous" ? "bg-sky-400/70" : "bg-white/15",
+              ].join(" ")}
+            >
+              <span
+                className={[
+                  "absolute top-0.5 h-3 w-3 rounded-full bg-white transition",
+                  mode === "previous" ? "left-3.5" : "left-0.5",
+                ].join(" ")}
+              />
+            </span>
+          </button>
+          {mode === "fixed" ? (
+            <Button type="button" variant="default" size="sm" onClick={() => setOpen(true)} className="h-8 whitespace-nowrap px-2.5 text-[11px]">
+              Chọn
+            </Button>
+          ) : null}
+          <Button type="button" variant="outline" size="sm" onClick={onClear} className="h-8 whitespace-nowrap px-2.5 text-[11px]">
             Clear
           </Button>
         </div>
@@ -3929,85 +4233,91 @@ function TopicTargetPicker({
         <div className="mt-3 rounded-[6px] border border-amber-300/15 bg-amber-300/8 px-3 py-2 text-[11px] leading-5 text-amber-100/80">
           Scan bot để lấy group/topic hiện có.
         </div>
+      ) : mode === "previous" ? (
+        <div className="mt-3 rounded-[6px] border border-sky-300/15 bg-sky-300/8 px-3 py-2 text-[11px] leading-5 text-sky-100/80">
+          Node sẽ gửi vào group/topic của tin nhắn trước đó. Không cần chọn đích cố định.
+        </div>
       ) : null}
-      <CommandDialog
-        open={open}
-        onOpenChange={setOpen}
-        title="Chọn group/topic"
-        description="Tìm group hoặc topic rồi chọn đích."
-        className="!h-[min(68vh,calc(100vh-2rem))] !max-h-[min(68vh,calc(100vh-2rem))] !w-[min(42rem,calc(100%-2rem))] !max-w-none overflow-hidden p-0"
-        showCloseButton
-      >
-        <Command className="h-full min-h-0 bg-background text-foreground">
-          <CommandInput placeholder="Tìm group hoặc topic..." />
-          <CommandList className="min-h-0 flex-1 overflow-y-auto">
-            <CommandEmpty>Không tìm thấy kết quả.</CommandEmpty>
+      {mode === "fixed" ? (
+        <CommandDialog
+          open={open}
+          onOpenChange={setOpen}
+          title="Chọn group/topic"
+          description="Tìm group hoặc topic rồi chọn đích."
+          className="!h-[min(68vh,calc(100vh-2rem))] !max-h-[min(68vh,calc(100vh-2rem))] !w-[min(42rem,calc(100%-2rem))] !max-w-none overflow-hidden p-0"
+          showCloseButton
+        >
+          <Command className="h-full min-h-0 bg-background text-foreground">
+            <CommandInput placeholder="Tìm group hoặc topic..." />
+            <CommandList className="min-h-0 flex-1 overflow-y-auto">
+              <CommandEmpty>Không tìm thấy kết quả.</CommandEmpty>
 
-            {groups.map((group) => {
-              const groupKey = topicKey(group.group);
-              const groupSelected = selectedKey === groupKey;
+              {groups.map((group) => {
+                const groupKey = topicKey(group.group);
+                const groupSelected = selectedKey === groupKey;
 
-              return (
-                <CommandGroup key={group.chatId} heading={group.chatTitle}>
-                  <CommandItem
-                    value={`${group.chatTitle} all messages group`}
-                    onSelect={() => chooseTopic(group.group)}
-                    className="flex items-center justify-between gap-3 rounded-md bg-muted/40"
-                  >
-                    <div className="flex min-w-0 flex-1 items-center gap-2.5">
-                      <GroupAvatar title={group.chatTitle} chatId={group.chatId} />
-                      <div className="min-w-0">
-                        <div className="truncate text-[12px] font-medium text-foreground">All messages</div>
-                        <div className="text-[10px] text-muted-foreground">{group.chatTitle}</div>
-                      </div>
-                    </div>
-                    <span
-                      className={[
-                        "ml-auto inline-flex size-7 shrink-0 items-center justify-center rounded-md border",
-                        groupSelected ? "border-primary/30 bg-primary/15 text-primary" : "border-border bg-background text-muted-foreground",
-                      ].join(" ")}
+                return (
+                  <CommandGroup key={group.chatId} heading={group.chatTitle}>
+                    <CommandItem
+                      value={`${group.chatTitle} all messages group`}
+                      onSelect={() => chooseTopic(group.group)}
+                      className="flex items-center justify-between gap-3 rounded-md bg-muted/40"
                     >
-                      {groupSelected ? <CheckCircleIcon aria-hidden="true" className="size-4" /> : <PlusIcon aria-hidden="true" className="size-4" />}
-                    </span>
-                  </CommandItem>
-
-                  {group.topics.map((topic) => {
-                    const key = topicKey(topic);
-                    const checked = selectedKey === key;
-
-                    return (
-                      <CommandItem
-                        key={key}
-                        value={`${group.chatTitle} ${topic.topicName} topic ${topic.threadId ?? ""}`}
-                        onSelect={() => chooseTopic(topic)}
-                        className="flex items-center justify-between gap-3 border-l border-border/40 pl-6"
-                      >
-                        <div className="flex min-w-0 flex-1 items-center gap-2.5">
-                          <GroupAvatar title={group.chatTitle} chatId={group.chatId} />
-                          <div className="min-w-0">
-                            <div className="truncate text-[11px] text-foreground">
-                              {formatTopicDisplayName(topic.topicName, topic.threadId)}
-                            </div>
-                            <div className="text-[10px] text-muted-foreground">{group.chatTitle}</div>
-                          </div>
+                      <div className="flex min-w-0 flex-1 items-center gap-2.5">
+                        <GroupAvatar title={group.chatTitle} chatId={group.chatId} refreshKey={avatarRefreshKey} />
+                        <div className="min-w-0">
+                          <div className="truncate text-[12px] font-medium text-foreground">All messages</div>
+                          <div className="text-[10px] text-muted-foreground">{group.chatTitle}</div>
                         </div>
+                      </div>
                       <span
                         className={[
                           "ml-auto inline-flex size-7 shrink-0 items-center justify-center rounded-md border",
-                          checked ? "border-primary/30 bg-primary/15 text-primary" : "border-border bg-background text-muted-foreground",
+                          groupSelected ? "border-primary/30 bg-primary/15 text-primary" : "border-border bg-background text-muted-foreground",
                         ].join(" ")}
                       >
-                        {checked ? <XCircleIcon aria-hidden="true" className="size-4" /> : <PlusIcon aria-hidden="true" className="size-4" />}
+                        {groupSelected ? <CheckCircleIcon aria-hidden="true" className="size-4" /> : <PlusIcon aria-hidden="true" className="size-4" />}
                       </span>
                     </CommandItem>
-                  );
-                })}
-                </CommandGroup>
-              );
-            })}
-          </CommandList>
-        </Command>
-      </CommandDialog>
+
+                    {group.topics.map((topic) => {
+                      const key = topicKey(topic);
+                      const checked = selectedKey === key;
+
+                      return (
+                        <CommandItem
+                          key={key}
+                          value={`${group.chatTitle} ${topic.topicName} topic ${topic.threadId ?? ""}`}
+                          onSelect={() => chooseTopic(topic)}
+                          className="flex items-center justify-between gap-3 border-l border-border/40 pl-6"
+                        >
+                          <div className="flex min-w-0 flex-1 items-center gap-2.5">
+                            <GroupAvatar title={group.chatTitle} chatId={group.chatId} refreshKey={avatarRefreshKey} />
+                            <div className="min-w-0">
+                              <div className="truncate text-[11px] text-foreground">
+                                {formatTopicDisplayName(topic.topicName, topic.threadId)}
+                              </div>
+                              <div className="text-[10px] text-muted-foreground">{group.chatTitle}</div>
+                            </div>
+                          </div>
+                          <span
+                            className={[
+                              "ml-auto inline-flex size-7 shrink-0 items-center justify-center rounded-md border",
+                              checked ? "border-rose-400/30 bg-rose-400/15 text-rose-300" : "border-emerald-400/25 bg-emerald-400/10 text-emerald-300",
+                            ].join(" ")}
+                          >
+                            {checked ? <XCircleIcon aria-hidden="true" className="size-4" /> : <PlusIcon aria-hidden="true" className="size-4" />}
+                          </span>
+                        </CommandItem>
+                      );
+                    })}
+                  </CommandGroup>
+                );
+              })}
+            </CommandList>
+          </Command>
+        </CommandDialog>
+      ) : null}
     </div>
   );
 }

@@ -4097,11 +4097,24 @@ function AllowedTopicPicker({
                       </div>
                       <span
                         className={[
-                          "ml-auto inline-flex size-7 shrink-0 items-center justify-center rounded-md border",
+                          "relative ml-auto inline-flex size-7 shrink-0 items-center justify-center rounded-md border",
                           groupSelected ? "border-rose-400/30 bg-rose-400/15 text-rose-300" : "border-emerald-400/25 bg-emerald-400/10 text-emerald-300",
                         ].join(" ")}
                       >
-                        {groupSelected ? <XCircleIcon aria-hidden="true" className="size-4" /> : <PlusIcon aria-hidden="true" className="size-4" />}
+                        <PlusIcon
+                          aria-hidden="true"
+                          className={[
+                            "pointer-events-none absolute inset-0 m-auto size-4 transition duration-150",
+                            groupSelected ? "scale-75 opacity-0" : "scale-100 opacity-100",
+                          ].join(" ")}
+                        />
+                        <XCircleIcon
+                          aria-hidden="true"
+                          className={[
+                            "pointer-events-none absolute inset-0 m-auto size-4 transition duration-150",
+                            groupSelected ? "scale-100 opacity-100" : "scale-75 opacity-0",
+                          ].join(" ")}
+                        />
                       </span>
                     </CommandItem>
                   ) : null}
@@ -4128,14 +4141,27 @@ function AllowedTopicPicker({
                       </div>
                       <span
                         className={[
-                          "ml-auto inline-flex size-7 shrink-0 items-center justify-center rounded-md border",
+                          "relative ml-auto inline-flex size-7 shrink-0 items-center justify-center rounded-md border",
                           checked ? "border-primary/30 bg-primary/15 text-primary" : "border-border bg-background text-muted-foreground",
                           ].join(" ")}
-                        >
-                          {checked ? <XCircleIcon aria-hidden="true" className="size-4" /> : <PlusIcon aria-hidden="true" className="size-4" />}
-                        </span>
-                      </CommandItem>
-                    );
+                      >
+                          <PlusIcon
+                            aria-hidden="true"
+                            className={[
+                              "pointer-events-none absolute inset-0 m-auto size-4 transition duration-150",
+                              checked ? "scale-75 opacity-0" : "scale-100 opacity-100",
+                            ].join(" ")}
+                          />
+                          <XCircleIcon
+                            aria-hidden="true"
+                            className={[
+                              "pointer-events-none absolute inset-0 m-auto size-4 transition duration-150",
+                              checked ? "scale-100 opacity-100" : "scale-75 opacity-0",
+                            ].join(" ")}
+                          />
+                      </span>
+                    </CommandItem>
+                  );
                   })}
                 </CommandGroup>
               );

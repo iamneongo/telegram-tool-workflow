@@ -4060,6 +4060,7 @@ function AllowedTopicPicker({
         </div>
       ) : null}
       <CommandDialog
+        key={`allowed-topics-${open ? "open" : "closed"}`}
         open={open}
         onOpenChange={setOpen}
         title="Chọn group/topic"
@@ -4265,10 +4266,11 @@ function TopicTargetPicker({
         </div>
       ) : null}
       {mode === "fixed" ? (
-        <CommandDialog
-          open={open}
-          onOpenChange={setOpen}
-          title="Chọn group/topic"
+      <CommandDialog
+        key={`topic-target-${open ? "open" : "closed"}`}
+        open={open}
+        onOpenChange={setOpen}
+        title="Chọn group/topic"
           description="Tìm group hoặc topic rồi chọn đích."
           className="!h-[min(68vh,calc(100vh-2rem))] !max-h-[min(68vh,calc(100vh-2rem))] !w-[min(42rem,calc(100%-2rem))] !max-w-none overflow-hidden p-0"
           showCloseButton
